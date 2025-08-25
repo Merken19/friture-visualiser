@@ -66,6 +66,7 @@ from friture.plotFilledCurve import PlotFilledCurve
 from friture.filled_curve import FilledCurve
 from friture.qml_tools import qml_url, raise_if_error
 from friture.generators.sine import Sine_Generator_Settings_View_Model
+from friture.api.integration import setup_streaming_integration, create_default_streaming_setup
 from friture.generators.white import White_Generator_Settings_View_Model
 from friture.generators.pink import Pink_Generator_Settings_View_Model
 from friture.generators.sweep import Sweep_Generator_Settings_View_Model
@@ -183,6 +184,27 @@ class Friture(QMainWindow, ):
 
         self.dockmanager = DockManager(self, self.main_grid_layout)
 
+        # Initialize streaming API integration
+        try:
+            self.streaming_integration = setup_streaming_integration(
+                self.dockmanager, 
+                self.level_widget
+            )
+            
+            # Create default streaming setup (WebSocket enabled by default)
+            create_default_streaming_setup(
+                self.streaming_integration,
+                enable_websocket=True,
+                enable_tcp=False,
+                enable_udp=False,
+                enable_http_sse=False
+            )
+            
+            self.logger.info("Streaming API integration initialized")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize streaming API: {e}")
+            self.streaming_integration = None
+
         # timer ticks
         self.display_timer.timeout.connect(self.dockmanager.canvasUpdate)
         self.display_timer.timeout.connect(self.level_widget.canvasUpdate)
@@ -268,6 +290,14 @@ class Friture(QMainWindow, ):
         self.settings_dialog.saveState(settings)
         settings.endGroup()
 
+        # Save streaming API settings
+        if self.streaming_integration:
+            try:
+                from friture.api.integration import save_streaming_settings
+                save_streaming_settings(settings, self.streaming_integration)
+            except Exception as e:
+                self.logger.error(f"Failed to save streaming settings: {e}")
+
     # method
     def migrateSettings(self):
         settings = QtCore.QSettings("Friture", "Friture")
@@ -324,6 +354,14 @@ class Friture(QMainWindow, ):
         self.settings_dialog.restoreState(settings)
         settings.endGroup()
 
+        # Load streaming API settings
+        if self.streaming_integration:
+            try:
+                from friture.api.integration import load_streaming_settings
+                load_streaming_settings(settings, self.streaming_integration)
+            except Exception as e:
+                self.logger.error(f"Failed to load streaming settings: {e}")
+
     # slot
     def timer_toggle(self):
         if self.display_timer.isActive():
@@ -333,6 +371,13 @@ class Friture(QMainWindow, ):
             self.playback_widget.stop_recording()
             AudioBackend().pause()
             self.dockmanager.pause()
+            
+            # Stop streaming API
+            if self.streaming_integration:
+                try:
+                    self.streaming_integration.streaming_api.stop_streaming()
+                except Exception as e:
+                    self.logger.error(f"Failed to stop streaming API: {e}")
         else:
             self.logger.info("Timer start")
             self.display_timer.start()
@@ -340,6 +385,13 @@ class Friture(QMainWindow, ):
             self.playback_widget.start_recording()
             AudioBackend().restart()
             self.dockmanager.restart()
+            
+            # Start streaming API
+            if self.streaming_integration:
+                try:
+                    self.streaming_integration.streaming_api.start_streaming()
+                except Exception as e:
+                    self.logger.error(f"Failed to start streaming API: {e}")
 
 
 def qt_message_handler(mode, context, message):

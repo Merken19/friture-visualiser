@@ -122,116 +122,114 @@ class StreamingProtocol(QObject):
 class WebSocketProtocol(StreamingProtocol):
     """
     WebSocket protocol implementation.
-    
+
     Provides full-duplex communication suitable for web applications
     and real-time dashboards. Supports multiple concurrent clients
     with automatic connection management.
     """
-    
     def __init__(self, host: str = 'localhost', port: int = 8765, parent=None):
         super().__init__(host, port, parent)
-        
+
         self._server = None
         self._server_thread = None
         self._loop = None
-    
+
     def start(self) -> None:
         """Start the WebSocket server."""
         if self._is_running:
             return
-        
+
         self._is_running = True
-        
-        # Start server in separate thread
         self._server_thread = threading.Thread(target=self._run_server, daemon=True)
         self._server_thread.start()
-        
         self.logger.info(f"WebSocket server starting on {self.host}:{self.port}")
-    
+
     def stop(self) -> None:
         """Stop the WebSocket server."""
         if not self._is_running:
             return
-        
+
         self._is_running = False
-        
+
         if self._loop:
             self._loop.call_soon_threadsafe(self._loop.stop)
-        
+
         if self._server_thread:
             self._server_thread.join(timeout=5.0)
-        
+
         self.logger.info("WebSocket server stopped")
-    
+
     def _run_server(self) -> None:
         """Run the WebSocket server (in separate thread)."""
         try:
             import websockets
-            
+
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
-            
-            async def handle_client(websocket, path):
-                client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
-                self._clients[client_id] = websocket
-                self._statistics['total_connections'] += 1
-                self._statistics['active_connections'] += 1
-                
-                self.client_connected.emit(client_id)
-                self.logger.info(f"WebSocket client connected: {client_id}")
-                
-                try:
-                    await websocket.wait_closed()
-                except Exception as e:
-                    self.logger.error(f"WebSocket client error: {e}")
-                finally:
-                    if client_id in self._clients:
-                        del self._clients[client_id]
-                    self._statistics['active_connections'] -= 1
-                    self.client_disconnected.emit(client_id)
-                    self.logger.info(f"WebSocket client disconnected: {client_id}")
-            
+
             async def server_main():
-                async with websockets.serve(handle_client, self.host, self.port):
+                async with websockets.serve(self._handle_client, self.host, self.port):
                     self.logger.info(f"WebSocket server started on {self.host}:{self.port}")
                     await asyncio.Future()  # run forever
 
             self._loop.run_until_complete(server_main())
-            
+
         except ImportError:
             self.logger.error("websockets library not available. Install with: pip install websockets")
             self.error_occurred.emit("websockets library not available")
         except Exception as e:
             self.logger.error(f"WebSocket server error: {e}")
             self.error_occurred.emit(str(e))
-    
-    def send_data(self, data: str, client_id: Optional[str] = None) -> None:
-        """
-        Send data to WebSocket clients.
+
+    async def _handle_client(self, websocket) -> None:
+        """Handle a WebSocket client connection."""
+        client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
         
-        Args:
-            data: Serialized data to send
-            client_id: Specific client to send to (None = broadcast)
-        """
+        # Try to get path from request, fallback to "/" if not available
+        try:
+            path = websocket.request.path if hasattr(websocket, 'request') else "/"
+        except AttributeError:
+            path = "/"
+        
+        self._clients[client_id] = websocket
+        self._statistics['total_connections'] += 1
+        self._statistics['active_connections'] += 1
+
+        self.client_connected.emit(client_id)
+        self.logger.info(f"WebSocket client connected: {client_id} (path={path})")
+
+        try:
+            await websocket.wait_closed()
+        except Exception as e:
+            self.logger.error(f"WebSocket client error: {e}")
+        finally:
+            if client_id in self._clients:
+                del self._clients[client_id]
+            self._statistics['active_connections'] -= 1
+            self.client_disconnected.emit(client_id)
+            self.logger.info(f"WebSocket client disconnected: {client_id}")
+                                    
+    def send_data(self, data: str, client_id: Optional[str] = None) -> None:
+        """Send data to WebSocket clients."""
         if not self._is_running or not self._clients:
             return
-        
+
         try:
             if client_id and client_id in self._clients:
                 clients = [self._clients[client_id]]
             else:
                 clients = list(self._clients.values())
-            
+
             for websocket in clients:
                 if self._loop:
                     asyncio.run_coroutine_threadsafe(
                         self._send_to_client(websocket, data), self._loop
                     )
-            
+
         except Exception as e:
             self.logger.error(f"Error sending WebSocket data: {e}")
             self.error_occurred.emit(str(e))
-    
+
     async def _send_to_client(self, websocket, data: str) -> None:
         """Send data to a specific WebSocket client."""
         try:
@@ -241,96 +239,92 @@ class WebSocketProtocol(StreamingProtocol):
         except Exception as e:
             self.logger.error(f"Error sending to WebSocket client: {e}")
 
-
 class TCPProtocol(StreamingProtocol):
     """
     TCP protocol implementation.
-    
+
     Provides reliable, connection-oriented communication suitable for
     applications requiring guaranteed delivery of audio analysis data.
     """
-    
     def __init__(self, host: str = 'localhost', port: int = 8766, parent=None):
         super().__init__(host, port, parent)
-        
+
         self._server_socket = None
         self._server_thread = None
         self._client_threads: List[threading.Thread] = []
-    
+
     def start(self) -> None:
         """Start the TCP server."""
         if self._is_running:
             return
-        
+
         self._is_running = True
-        
+
         try:
             self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._server_socket.bind((self.host, self.port))
             self._server_socket.listen(5)
-            
+
             self._server_thread = threading.Thread(target=self._accept_clients, daemon=True)
             self._server_thread.start()
-            
+
             self.logger.info(f"TCP server started on {self.host}:{self.port}")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to start TCP server: {e}")
             self.error_occurred.emit(str(e))
             self._is_running = False
-    
+
     def stop(self) -> None:
         """Stop the TCP server."""
         if not self._is_running:
             return
-        
+
         self._is_running = False
-        
+
         if self._server_socket:
             self._server_socket.close()
-        
-        # Wait for threads to finish
+
         if self._server_thread:
             self._server_thread.join(timeout=5.0)
-        
+
         for thread in self._client_threads:
             thread.join(timeout=1.0)
-        
+
         self.logger.info("TCP server stopped")
-    
+
     def _accept_clients(self) -> None:
         """Accept incoming client connections."""
         while self._is_running:
             try:
                 client_socket, address = self._server_socket.accept()
                 client_id = f"{address[0]}:{address[1]}"
-                
+
                 self._clients[client_id] = client_socket
                 self._statistics['total_connections'] += 1
                 self._statistics['active_connections'] += 1
-                
-                # Start client handler thread
+
                 client_thread = threading.Thread(
-                    target=self._handle_client, 
+                    target=self._handle_client,
                     args=(client_socket, client_id),
                     daemon=True
                 )
                 client_thread.start()
                 self._client_threads.append(client_thread)
-                
+
                 self.client_connected.emit(client_id)
                 self.logger.info(f"TCP client connected: {client_id}")
-                
+
             except Exception as e:
                 if self._is_running:
                     self.logger.error(f"Error accepting TCP client: {e}")
-    
+
     def _handle_client(self, client_socket, client_id: str) -> None:
         """Handle a TCP client connection."""
         try:
             while self._is_running:
-                # Keep connection alive (could implement ping/pong here)
+                # Keep-alive loop; extend to handle inbound data if needed
                 time.sleep(1.0)
         except Exception as e:
             self.logger.error(f"TCP client handler error: {e}")
@@ -341,28 +335,21 @@ class TCPProtocol(StreamingProtocol):
             self._statistics['active_connections'] -= 1
             self.client_disconnected.emit(client_id)
             self.logger.info(f"TCP client disconnected: {client_id}")
-    
+
     def send_data(self, data: str, client_id: Optional[str] = None) -> None:
-        """
-        Send data to TCP clients.
-        
-        Args:
-            data: Serialized data to send
-            client_id: Specific client to send to (None = broadcast)
-        """
+        """Send data to TCP clients."""
         if not self._is_running or not self._clients:
             return
-        
-        # Add length prefix for framing
+
         message = f"{len(data)}\n{data}"
         message_bytes = message.encode('utf-8')
-        
+
         try:
             if client_id and client_id in self._clients:
                 clients = [(client_id, self._clients[client_id])]
             else:
                 clients = list(self._clients.items())
-            
+
             for cid, client_socket in clients:
                 try:
                     client_socket.sendall(message_bytes)
@@ -371,11 +358,10 @@ class TCPProtocol(StreamingProtocol):
                     self.data_sent.emit(cid, len(message_bytes))
                 except Exception as e:
                     self.logger.error(f"Error sending to TCP client {cid}: {e}")
-            
+
         except Exception as e:
             self.logger.error(f"Error sending TCP data: {e}")
             self.error_occurred.emit(str(e))
-
 
 class UDPProtocol(StreamingProtocol):
     """

@@ -40,7 +40,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from typing import Dict
+from typing import Dict, Optional
 
 from .data_types import DataType
 

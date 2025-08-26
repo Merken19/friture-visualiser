@@ -50,7 +50,7 @@ import asyncio
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
 
 
-class StreamingProtocol(QObject, ABC):
+class StreamingProtocol(QObject):
     """
     Abstract base class for streaming protocols.
     
@@ -191,9 +191,12 @@ class WebSocketProtocol(StreamingProtocol):
                     self.client_disconnected.emit(client_id)
                     self.logger.info(f"WebSocket client disconnected: {client_id}")
             
-            start_server = websockets.serve(handle_client, self.host, self.port)
-            self._loop.run_until_complete(start_server)
-            self._loop.run_forever()
+            async def server_main():
+                async with websockets.serve(handle_client, self.host, self.port):
+                    self.logger.info(f"WebSocket server started on {self.host}:{self.port}")
+                    await asyncio.Future()  # run forever
+
+            self._loop.run_until_complete(server_main())
             
         except ImportError:
             self.logger.error("websockets library not available. Install with: pip install websockets")

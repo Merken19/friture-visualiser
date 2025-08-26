@@ -51,7 +51,7 @@ from .data_types import (DataType, PitchData, FFTSpectrumData, OctaveSpectrumDat
 from ..audiobackend import AudioBackend
 
 
-class DataProducer(QObject, ABC):
+class DataProducer(QObject):
     """
     Abstract base class for data producers.
     

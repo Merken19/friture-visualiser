@@ -36,7 +36,7 @@ Friture functionality while adding streaming capabilities.
 """
 
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 
 from PyQt5.QtCore import QObject, QSettings
 

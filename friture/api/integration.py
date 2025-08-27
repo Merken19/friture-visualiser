@@ -221,6 +221,9 @@ def create_default_streaming_setup(integration: StreamingIntegration,
     """
     api = integration.streaming_api
     
+    # Clear any existing protocols first
+    api.clear_protocols()
+    
     # Add protocols
     if enable_websocket:
         websocket_protocol = WebSocketProtocol()

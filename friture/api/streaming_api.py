@@ -180,6 +180,14 @@ class StreamingAPI(QObject):
             protocol: Protocol instance (WebSocket, TCP, UDP, etc.)
         """
         with self._lock:
+            # Check if we already have a protocol of this type on the same port
+            for existing_protocol in self._protocols:
+                if (type(existing_protocol) == type(protocol) and 
+                    existing_protocol.host == protocol.host and 
+                    existing_protocol.port == protocol.port):
+                    self.logger.warning(f"Protocol {type(protocol).__name__} already exists on {protocol.host}:{protocol.port}")
+                    return
+            
             self._protocols.append(protocol)
             protocol.error_occurred.connect(
                 lambda error: self.error_occurred.emit("protocol", error)
@@ -190,6 +198,17 @@ class StreamingAPI(QObject):
             
             self.logger.info(f"Added protocol: {type(protocol).__name__}")
     
+    def clear_protocols(self) -> None:
+        """Clears all registered protocols and stops them if running."""
+        with self._lock:
+            for protocol in self._protocols:
+                try:
+                    protocol.stop()
+                except Exception as e:
+                    self.logger.error(f"Error stopping protocol during clear: {e}")
+            self._protocols.clear()
+            self.logger.info("All protocols cleared.")
+            
     def start_streaming(self) -> None:
         """
         Start the streaming API.

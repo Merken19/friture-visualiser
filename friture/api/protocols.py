@@ -43,9 +43,9 @@ import logging
 import socket
 import threading
 import time
+import sys
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List, Callable
-import asyncio
 
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
 from .consumers import QObjectABCMeta
@@ -134,10 +134,28 @@ class WebSocketProtocol(StreamingProtocol):
         self._server = None
         self._server_thread = None
         self._loop = None
+        self._loop_ready_event = threading.Event()
+        self._loop_thread_id = None
+        self._websockets_available = None
     
     def start(self) -> None:
         """Start the WebSocket server."""
         if self._is_running:
+            self.logger.info(f"WebSocket server already running on {self.host}:{self.port}")
+            return
+        
+        # Check if websockets library is available
+        if self._websockets_available is None:
+            try:
+                import websockets
+                self._websockets_available = True
+            except ImportError:
+                self._websockets_available = False
+                self.logger.error("websockets library not available. Install with: pip install websockets")
+                self.error_occurred.emit("websockets library not available")
+                return
+        
+        if not self._websockets_available:
             return
         
         self._is_running = True
@@ -156,10 +174,16 @@ class WebSocketProtocol(StreamingProtocol):
         self._is_running = False
         
         if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                pass  # Loop might already be stopped
         
         if self._server_thread:
             self._server_thread.join(timeout=5.0)
+        
+        self._loop_ready_event.clear()
+        self._loop_thread_id = None
         
         self.logger.info("WebSocket server stopped")
     
@@ -167,9 +191,28 @@ class WebSocketProtocol(StreamingProtocol):
         """Run the WebSocket server (in separate thread)."""
         try:
             import websockets
+            import asyncio
             
-            self._loop = asyncio.new_event_loop()
+            # Check if port is available
+            test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                test_socket.bind((self.host, self.port))
+                test_socket.close()
+            except OSError as e:
+                self.logger.error(f"Port {self.port} is already in use: {e}")
+                self.error_occurred.emit(f"Port {self.port} is already in use")
+                self._is_running = False
+                return
+            
+            # Create new event loop for this thread
+            if sys.platform == 'win32':
+                # On Windows, use ProactorEventLoop for better compatibility
+                self._loop = asyncio.ProactorEventLoop()
+            else:
+                self._loop = asyncio.new_event_loop()
+            
             asyncio.set_event_loop(self._loop)
+            self._loop_thread_id = threading.get_ident()
             
             async def handle_client(websocket, path):
                 client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
@@ -191,16 +234,32 @@ class WebSocketProtocol(StreamingProtocol):
                     self.client_disconnected.emit(client_id)
                     self.logger.info(f"WebSocket client disconnected: {client_id}")
             
-            start_server = websockets.serve(handle_client, self.host, self.port)
-            self._loop.run_until_complete(start_server)
-            self._loop.run_forever()
+            async def start_server():
+                server = await websockets.serve(handle_client, self.host, self.port)
+                self._server = server
+                self._loop_ready_event.set()  # Signal that server is ready
+                self.logger.info(f"WebSocket server running on {self.host}:{self.port}")
+                
+                # Keep server running
+                await server.wait_closed()
             
-        except ImportError:
-            self.logger.error("websockets library not available. Install with: pip install websockets")
-            self.error_occurred.emit("websockets library not available")
+            # Run the server
+            self._loop.run_until_complete(start_server())
+            
+        except OSError as e:
+            self.logger.error(f"WebSocket server error: Port {self.port} binding failed: {e}")
+            self.error_occurred.emit(f"Port {self.port} binding failed: {e}")
+            self._is_running = False
         except Exception as e:
             self.logger.error(f"WebSocket server error: {e}")
             self.error_occurred.emit(str(e))
+            self._is_running = False
+        finally:
+            self._loop_ready_event.clear()
+            self._loop_thread_id = None
+            if self._loop and not self._loop.is_closed():
+                self._loop.close()
+            self._loop = None
     
     def send_data(self, data: str, client_id: Optional[str] = None) -> None:
         """
@@ -213,7 +272,19 @@ class WebSocketProtocol(StreamingProtocol):
         if not self._is_running or not self._clients:
             return
         
+        # Wait for the event loop to be ready
+        if not self._loop_ready_event.wait(timeout=1.0):
+            self.logger.warning("WebSocket event loop not ready, dropping data")
+            return
+        
+        # Ensure we're not calling from the same thread as the loop
+        if threading.get_ident() == self._loop_thread_id:
+            self.logger.error("Cannot send data from asyncio loop thread")
+            return
+        
         try:
+            import asyncio
+            
             if client_id and client_id in self._clients:
                 clients = [self._clients[client_id]]
             else:
@@ -221,9 +292,13 @@ class WebSocketProtocol(StreamingProtocol):
             
             for websocket in clients:
                 if self._loop:
-                    asyncio.run_coroutine_threadsafe(
-                        self._send_to_client(websocket, data), self._loop
-                    )
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self._send_to_client(websocket, data), self._loop
+                        )
+                        # Don't wait for the result to avoid blocking
+                    except RuntimeError as e:
+                        self.logger.error(f"Error scheduling WebSocket send: {e}")
             
         except Exception as e:
             self.logger.error(f"Error sending WebSocket data: {e}")

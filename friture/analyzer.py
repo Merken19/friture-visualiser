@@ -195,7 +195,7 @@ class Friture(QMainWindow, ):
             create_default_streaming_setup(
                 self.streaming_integration,
                 enable_websocket=True,
-                enable_tcp=False,
+                enable_tcp=True,
                 enable_udp=False,
                 enable_http_sse=False
             )
@@ -354,13 +354,13 @@ class Friture(QMainWindow, ):
         self.settings_dialog.restoreState(settings)
         settings.endGroup()
 
-        # Load streaming API settings
-        if self.streaming_integration:
-            try:
-                from friture.api.integration import load_streaming_settings
-                load_streaming_settings(settings, self.streaming_integration)
-            except Exception as e:
-                self.logger.error(f"Failed to load streaming settings: {e}")
+        # # Load streaming API settings // No need to load twice
+        # if self.streaming_integration:
+        #     try:
+        #         from friture.api.integration import load_streaming_settings
+        #         load_streaming_settings(settings, self.streaming_integration)
+        #     except Exception as e:
+        #         self.logger.error(f"Failed to load streaming settings: {e}")
 
     # slot
     def timer_toggle(self):

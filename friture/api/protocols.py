@@ -214,7 +214,7 @@ class WebSocketProtocol(StreamingProtocol):
             asyncio.set_event_loop(self._loop)
             self._loop_thread_id = threading.get_ident()
             
-            async def handle_client(websocket, path):
+            async def handle_client(websocket):
                 client_id = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
                 self._clients[client_id] = websocket
                 self._statistics['total_connections'] += 1

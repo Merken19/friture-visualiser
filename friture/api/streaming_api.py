@@ -176,32 +176,20 @@ class StreamingAPI(QObject):
         """
         Add a streaming protocol for network communication.
         
-        Ensures we don't add duplicate protocols on the same host/port.
+        Args:
+            protocol: Protocol instance (WebSocket, TCP, UDP, etc.)
         """
         with self._lock:
-            # Check if an identical protocol already exists
-            for existing in self._protocols:
-                if (
-                    type(existing) is type(protocol) and
-                    getattr(existing, "host", None) == getattr(protocol, "host", None) and
-                    getattr(existing, "port", None) == getattr(protocol, "port", None)
-                ):
-                    self.logger.warning(
-                        f"Protocol {type(protocol).__name__} already exists on "
-                        f"{getattr(protocol, 'host', '?')}:{getattr(protocol, 'port', '?')} - skipping"
-                    )
-                    return
-
             self._protocols.append(protocol)
             protocol.error_occurred.connect(
                 lambda error: self.error_occurred.emit("protocol", error)
             )
-
+            
             if self._is_streaming:
                 protocol.start()
-
+            
             self.logger.info(f"Added protocol: {type(protocol).__name__}")
-
+    
     def start_streaming(self) -> None:
         """
         Start the streaming API.
@@ -382,9 +370,9 @@ class StreamingAPI(QObject):
             
             self._last_stats_time = current_time
             
-            # # Log performance summary
-            # if self._statistics.get('total_data_points', 0) % 1000 == 0:
-            #     self.logger.debug(f"Streaming stats: {dict(self._statistics)}")
+            # Log performance summary
+            if self._statistics.get('total_data_points', 0) % 1000 == 0:
+                self.logger.debug(f"Streaming stats: {dict(self._statistics)}")
                 
         except Exception as e:
             self.logger.error(f"Error updating performance stats: {e}")

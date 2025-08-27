@@ -48,9 +48,9 @@ from typing import Optional, Dict, Any, List, Callable
 import asyncio
 
 from PyQt5.QtCore import QObject, pyqtSignal, QThread
+from .consumers import QObjectABCMeta
 
-
-class StreamingProtocol(QObject):
+class StreamingProtocol(QObject, ABC, metaclass=QObjectABCMeta):
     """
     Abstract base class for streaming protocols.
     

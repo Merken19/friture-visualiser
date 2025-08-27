@@ -42,7 +42,7 @@ import logging
 import queue
 import threading
 import time
-from abc import ABC, abstractmethod
+from abc import ABC, ABCMeta, abstractmethod
 from collections import deque
 from typing import Callable, Optional, Any, Dict
 import json
@@ -51,8 +51,11 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from .data_types import StreamingData
 
+# Define the custom metaclass
+class QObjectABCMeta(type(QObject), ABCMeta):
+    pass
 
-class DataConsumer(QObject):
+class DataConsumer(QObject, ABC, metaclass=QObjectABCMeta):
     """
     Abstract base class for data consumers.
     

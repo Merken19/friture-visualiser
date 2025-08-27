@@ -49,9 +49,9 @@ from .data_types import (DataType, PitchData, FFTSpectrumData, OctaveSpectrumDat
                         LevelsData, DelayEstimatorData, StreamingMetadata,
                         create_streaming_data)
 from ..audiobackend import AudioBackend
+from .consumers import QObjectABCMeta
 
-
-class DataProducer(QObject):
+class DataProducer(QObject, ABC, metaclass=QObjectABCMeta):
     """
     Abstract base class for data producers.
     

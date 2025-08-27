@@ -227,14 +227,17 @@ class StreamingAPI(QObject):
             for protocol in self._protocols:
                 try:
                     protocol.start()
+                    print(f"Started protocol {type(protocol).__name__} on {protocol.host}:{protocol.port}")
                 except Exception as e:
                     self.logger.error(f"Failed to start protocol {type(protocol).__name__}: {e}")
             
             # Start producers that have consumers
             for data_type, producer in self._producers.items():
+                print(f"Checking producer for {data_type}, consumers: {len(self._consumers[data_type])}")
                 if self._consumers[data_type]:
                     try:
                         producer.start()
+                        print(f"Started producer for {data_type}")
                     except Exception as e:
                         self.logger.error(f"Failed to start producer for {data_type}: {e}")
             

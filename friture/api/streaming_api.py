@@ -180,6 +180,14 @@ class StreamingAPI(QObject):
             protocol: Protocol instance (WebSocket, TCP, UDP, etc.)
         """
         with self._lock:
+            # Check if we already have a protocol of this type on the same port
+            for existing_protocol in self._protocols:
+                if (type(existing_protocol) == type(protocol) and 
+                    existing_protocol.host == protocol.host and 
+                    existing_protocol.port == protocol.port):
+                    self.logger.warning(f"Protocol {type(protocol).__name__} already exists on {protocol.host}:{protocol.port}")
+                    return
+            
             self._protocols.append(protocol)
             protocol.error_occurred.connect(
                 lambda error: self.error_occurred.emit("protocol", error)

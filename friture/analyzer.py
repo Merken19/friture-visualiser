@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Copyright (C) 2009 Timothée Lecomte
+# Copyright (C) 2025 Friture Contributors
 
 # This file is part of Friture.
 #
@@ -17,564 +17,706 @@
 # You should have received a copy of the GNU General Public License
 # along with Friture.  If not, see <http://www.gnu.org/licenses/>.
 
-import sys
-import os
-import os.path
-import argparse
-import errno
-import platform
+"""
+Data Producers for Friture Streaming API
+
+Producers are responsible for extracting data from Friture widgets and
+converting it into standardized streaming data formats. Each producer
+is designed to have minimal performance impact on the source widget.
+
+Design Principles:
+- Zero-copy data access where possible
+- Minimal computational overhead
+- Non-blocking operation
+- Automatic lifecycle management
+- Rich metadata extraction
+
+Implementation Notes:
+- Producers connect to existing widget signals to avoid polling
+- Data extraction happens in the main thread to avoid synchronization issues
+- Producers can be started/stopped independently based on consumer demand
+"""
+
 import logging
-import logging.handlers
-
-from PyQt5 import QtCore, QtWidgets
-# specifically import from PyQt5.QtGui and QWidgets for startup time improvement :
-from PyQt5.QtWidgets import QMainWindow, QHBoxLayout, QVBoxLayout, QApplication, QSplashScreen
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtQml import QQmlEngine, qmlRegisterSingletonType, qmlRegisterType
-from PyQt5.QtQuickWidgets import QQuickWidget
-from PyQt5.QtCore import QObject
-
-import platformdirs
-
-# importing friture.exceptionhandler also installs a temporary exception hook
-from friture.exceptionhandler import errorBox, fileexcepthook
-import friture
-from friture.ui_friture import Ui_MainWindow
-from friture.about import About_Dialog  # About dialog
-from friture.settings import Settings_Dialog  # Setting dialog
-from friture.audiobuffer import AudioBuffer  # audio ring buffer class
-from friture.audiobackend import AudioBackend  # audio backend class
-from friture.dockmanager import DockManager
-from friture.tilelayout import TileLayout
-from friture.level_view_model import LevelViewModel
-from friture.level_data import LevelData
-from friture.levels import Levels_Widget
-from friture.store import GetStore, Store
-from friture.scope_data import Scope_Data
-from friture.axis import Axis
-from friture.colorBar import ColorBar
-from friture.curve import Curve
-from friture.playback.control import PlaybackControlWidget
-from friture.playback.player import Player
-from friture.plotCurve import PlotCurve
-from friture.plotting.coordinateTransform import CoordinateTransform
-from friture.plotting.scaleDivision import ScaleDivision, Tick
-from friture.spectrogram_item import SpectrogramItem
-from friture.spectrogram_item_data import SpectrogramImageData
-from friture.spectrum_data import Spectrum_Data
-from friture.plotFilledCurve import PlotFilledCurve
-from friture.filled_curve import FilledCurve
-from friture.qml_tools import qml_url, raise_if_error
-from friture.generators.sine import Sine_Generator_Settings_View_Model
-from friture.api.integration import setup_streaming_integration, create_default_streaming_setup
-from friture.generators.white import White_Generator_Settings_View_Model
-from friture.generators.pink import Pink_Generator_Settings_View_Model
-from friture.generators.sweep import Sweep_Generator_Settings_View_Model
-from friture.generators.burst import Burst_Generator_Settings_View_Model
-
-# the display timer could be made faster when the processing
-# power allows it, firing down to every 10 ms
-SMOOTH_DISPLAY_TIMER_PERIOD_MS = 10
-
-# the slow timer is used for text refresh
-# Text has to be refreshed slowly in order to be readable.
-# (and text painting is costly)
-SLOW_TIMER_PERIOD_MS = 1000
-
-
-class Friture(QMainWindow, ):
-
-    def __init__(self):
-        QMainWindow.__init__(self)
-
-        self.logger = logging.getLogger(__name__)
-
-        # exception hook that logs to console, file, and display a message box
-        self.errorDialogOpened = False
-        sys.excepthook = self.excepthook
-
-        store = GetStore()
-
-        # set the store as the parent of the QML engine
-        # so that the store outlives the engine
-        # otherwise the store gets destroyed before the engine
-        # which refreshes the QML bindings to undefined values
-        # and QML errors are raised
-        self.qml_engine = QQmlEngine(store)
-
-        # Register the ScaleDivision type.  Its URI is 'ScaleDivision', it's v1.0 and the type
-        # will be called 'Person' in QML.
-        qmlRegisterType(ScaleDivision, 'Friture', 1, 0, 'ScaleDivision')
-        qmlRegisterType(CoordinateTransform, 'Friture', 1, 0, 'CoordinateTransform')
-        qmlRegisterType(Scope_Data, 'Friture', 1, 0, 'ScopeData')
-        qmlRegisterType(Spectrum_Data, 'Friture', 1, 0, 'SpectrumData')
-        qmlRegisterType(LevelData, 'Friture', 1, 0, 'LevelData')
-        qmlRegisterType(LevelViewModel, 'Friture', 1, 0, 'LevelViewModel')
-        qmlRegisterType(Axis, 'Friture', 1, 0, 'Axis')
-        qmlRegisterType(Curve, 'Friture', 1, 0, 'Curve')
-        qmlRegisterType(FilledCurve, 'Friture', 1, 0, 'FilledCurve')
-        qmlRegisterType(PlotCurve, 'Friture', 1, 0, 'PlotCurve')
-        qmlRegisterType(PlotFilledCurve, 'Friture', 1, 0, 'PlotFilledCurve')
-        qmlRegisterType(SpectrogramItem, 'Friture', 1, 0, 'SpectrogramItem')
-        qmlRegisterType(SpectrogramImageData, 'Friture', 1, 0, 'SpectrogramImageData')
-        qmlRegisterType(ColorBar, 'Friture', 1, 0, 'ColorBar')
-        qmlRegisterType(Tick, 'Friture', 1, 0, 'Tick')
-        qmlRegisterType(TileLayout, 'Friture', 1, 0, 'TileLayout')
-        qmlRegisterType(Burst_Generator_Settings_View_Model, 'Friture', 1, 0, 'Burst_Generator_Settings_View_Model')
-        qmlRegisterType(Pink_Generator_Settings_View_Model, 'Friture', 1, 0, 'Pink_Generator_Settings_View_Model')
-        qmlRegisterType(White_Generator_Settings_View_Model, 'Friture', 1, 0, 'White_Generator_Settings_View_Model')
-        qmlRegisterType(Sweep_Generator_Settings_View_Model, 'Friture', 1, 0, 'Sweep_Generator_Settings_View_Model')
-        qmlRegisterType(Sine_Generator_Settings_View_Model, 'Friture', 1, 0, 'Sine_Generator_Settings_View_Model')
-
-        qmlRegisterSingletonType(Store, 'Friture', 1, 0, 'Store', lambda engine, script_engine: GetStore())
-
-        # Setup the user interface
-        self.ui = Ui_MainWindow()
-        self.ui.setupUi(self)
-
-        # Initialize the audio data ring buffer
-        self.audiobuffer = AudioBuffer()
-
-        # Initialize the audio backend
-        # signal containing new data from the audio callback thread, processed as numpy array
-        AudioBackend().new_data_available.connect(self.audiobuffer.handle_new_data)
-
-        self.player = Player(self)
-        self.audiobuffer.new_data_available.connect(self.player.handle_new_data)
-
-        # this timer is used to update widgets that just need to display as fast as they can
-        self.display_timer = QtCore.QTimer()
-        self.display_timer.setInterval(SMOOTH_DISPLAY_TIMER_PERIOD_MS)  # constant timing
-
-        # slow timer
-        self.slow_timer = QtCore.QTimer()
-        self.slow_timer.setInterval(SLOW_TIMER_PERIOD_MS)  # constant timing
-
-        self.about_dialog = About_Dialog(self, self.slow_timer)
-        self.settings_dialog = Settings_Dialog(self)
-
-        self.level_widget = Levels_Widget(self, self.qml_engine)
-        self.level_widget.set_buffer(self.audiobuffer)
-        self.audiobuffer.new_data_available.connect(self.level_widget.handle_new_data)
-
-        self.hboxLayout = QHBoxLayout(self.ui.centralwidget)
-        self.hboxLayout.setContentsMargins(0, 0, 0, 0)
-        self.hboxLayout.addWidget(self.level_widget)
-
-        self.vboxLayout = QVBoxLayout()
-        self.hboxLayout.addLayout(self.vboxLayout)
-
-        self.centralQuickWidget = QQuickWidget(self.qml_engine, self)
-        self.centralQuickWidget.setObjectName("centralQuickWidget")
-        self.centralQuickWidget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.centralQuickWidget.setResizeMode(QQuickWidget.SizeRootObjectToView)
-        self.centralQuickWidget.setSource(qml_url("CentralWidget.qml"))
-        self.vboxLayout.addWidget(self.centralQuickWidget)
-
-        raise_if_error(self.centralQuickWidget)
-
-        central_widget_root = self.centralQuickWidget.rootObject()
-        self.main_grid_layout = central_widget_root.findChild(QObject, "main_tile_layout")
-        assert self.main_grid_layout is not None, "Main grid layout not found in CentralWidget.qml"
-
-        self.playback_widget = PlaybackControlWidget(
-            self, self.qml_engine, self.player)
-        self.playback_widget.setVisible(self.settings_dialog.show_playback)
-        self.vboxLayout.addWidget(self.playback_widget)
-
-        self.dockmanager = DockManager(self, self.main_grid_layout)
-
-        # Initialize streaming API integration
-        try:
-            self.streaming_integration = setup_streaming_integration(
-                self.dockmanager, 
-                self.level_widget,
-                self.audiobuffer
-            )
-            
-            # Create default streaming setup (WebSocket enabled by default)
-            create_default_streaming_setup(
-                self.streaming_integration,
-                enable_websocket=True,
-                enable_tcp=True,
-                enable_udp=False,
-                enable_http_sse=False
-            )
-            
-            self.logger.info("Streaming API integration initialized")
-        except Exception as e:
-            self.logger.error(f"Failed to initialize streaming API: {e}")
-            self.streaming_integration = None
-
-        # timer ticks
-        self.display_timer.timeout.connect(self.dockmanager.canvasUpdate)
-        self.display_timer.timeout.connect(self.level_widget.canvasUpdate)
-        self.display_timer.timeout.connect(AudioBackend().fetchAudioData)
-
-        # toolbar clicks
-        self.ui.actionStart.triggered.connect(self.timer_toggle)
-        self.ui.actionSettings.triggered.connect(self.settings_called)
-        self.ui.actionAbout.triggered.connect(self.about_called)
-        self.ui.actionNew_dock.triggered.connect(self.dockmanager.new_dock)
-        self.playback_widget.recording_toggled.connect(self.timer_toggle)
-
-        # settings changes
-        self.settings_dialog.show_playback_changed.connect(self.show_playback_changed)
-        self.settings_dialog.history_length_changed.connect(self.player.set_history_seconds)
-
-        # restore the settings and widgets geometries
-        self.restoreAppState()
-
-        # make sure the toolbar is shown
-        # in case it was closed by mistake (before it was made impossible)
-        self.ui.toolBar.setVisible(True)
-
-        # prevent from hiding or moving the toolbar
-        self.ui.toolBar.toggleViewAction().setVisible(False)
-        self.ui.toolBar.setMovable(False)
-        self.ui.toolBar.setFloatable(False)
-
-        # start timers
-        self.timer_toggle()
-        self.slow_timer.start()
-
-        self.logger.info("Init finished, entering the main loop")
-
-    # exception hook that logs to console, file, and display a message box
-    def excepthook(self, exception_type, exception_value, traceback_object):
-        # a keyboard interrupt is an intentional exit, so close the application
-        if exception_type is KeyboardInterrupt:
-            self.close()
-            exit(0)
-
-        gui_message = fileexcepthook(exception_type, exception_value, traceback_object)
-
-        # we do not want to flood the user with message boxes when the error happens repeatedly on each timer event
-        if not self.errorDialogOpened:
-            self.errorDialogOpened = True
-            errorBox(gui_message)
-            self.errorDialogOpened = False
-
-    # slot
-    def settings_called(self):
-        self.settings_dialog.show()
-
-    def show_playback_changed(self, show: bool) -> None:
-        self.playback_widget.setVisible(show)
-
-    # slot
-    def about_called(self):
-        self.about_dialog.show()
-
-    # event handler
-    def closeEvent(self, event):
-        AudioBackend().close()
-        self.saveAppState()
-        event.accept()
-
-    # method
-    def saveAppState(self):
-        settings = QtCore.QSettings("Friture", "Friture")
-
-        settings.beginGroup("Docks")
-        self.dockmanager.saveState(settings)
-        settings.endGroup()
-
-        settings.beginGroup("MainWindow")
-        windowGeometry = self.saveGeometry()
-        settings.setValue("windowGeometry", windowGeometry)
-        windowState = self.saveState()
-        settings.setValue("windowState", windowState)
-        settings.endGroup()
-
-        settings.beginGroup("AudioBackend")
-        self.settings_dialog.saveState(settings)
-        settings.endGroup()
-
-        # Save streaming API settings
-        if self.streaming_integration:
-            try:
-                from friture.api.integration import save_streaming_settings
-                save_streaming_settings(settings, self.streaming_integration)
-            except Exception as e:
-                self.logger.error(f"Failed to save streaming settings: {e}")
-
-    # method
-    def migrateSettings(self):
-        settings = QtCore.QSettings("Friture", "Friture")
-
-        # 1. move the central widget to a normal dock
-        if settings.contains("CentralWidget/type"):
-            settings.beginGroup("CentralWidget")
-            centralWidgetKeys = settings.allKeys()
-            children = {key: settings.value(key, type=QtCore.QVariant) for key in centralWidgetKeys}
-            settings.endGroup()
-
-            if not settings.contains("Docks/central/type"):
-                # write them to a new dock instead
-                for key, value in children.items():
-                    settings.setValue("Docks/central/" + key, value)
-
-                # add the new dock name to dockNames
-                docknames = settings.value("Docks/dockNames", [])
-                docknames = ["central"] + docknames
-                settings.setValue("Docks/dockNames", docknames)
-
-            settings.remove("CentralWidget")
-
-        # 2. remove any level widget
-        if settings.contains("Docks/dockNames"):
-            docknames = settings.value("Docks/dockNames", [])
-            if docknames == None:
-            	docknames = []
-            newDockNames = []
-            for dockname in docknames:
-                widgetType = settings.value("Docks/" + dockname + "/type", 0, type=int)
-                if widgetType == 0:
-                    settings.remove("Docks/" + dockname)
-                else:
-                    newDockNames.append(dockname)
-            settings.setValue("Docks/dockNames", newDockNames)
-
-    # method
-    def restoreAppState(self):
-        self.migrateSettings()
-
-        settings = QtCore.QSettings("Friture", "Friture")
-
-        settings.beginGroup("Docks")
-        self.dockmanager.restoreState(settings)
-        settings.endGroup()
-
-        settings.beginGroup("MainWindow")
-        self.restoreGeometry(settings.value("windowGeometry", type=QtCore.QByteArray))
-        self.restoreState(settings.value("windowState", type=QtCore.QByteArray))
-        settings.endGroup()
-
-        settings.beginGroup("AudioBackend")
-        self.settings_dialog.restoreState(settings)
-        settings.endGroup()
-
-        # # Load streaming API settings // No need to load twice
-        # if self.streaming_integration:
-        #     try:
-        #         from friture.api.integration import load_streaming_settings
-        #         load_streaming_settings(settings, self.streaming_integration)
-        #     except Exception as e:
-        #         self.logger.error(f"Failed to load streaming settings: {e}")
-
-    # slot
-    def timer_toggle(self):
-        if self.display_timer.isActive():
-            self.logger.info("Timer stop")
-            self.display_timer.stop()
-            self.ui.actionStart.setText("Start")
-            self.playback_widget.stop_recording()
-            AudioBackend().pause()
-            self.dockmanager.pause()
-            
-            # Stop streaming API
-            if self.streaming_integration:
-                try:
-                    self.streaming_integration.streaming_api.stop_streaming()
-                except Exception as e:
-                    self.logger.error(f"Failed to stop streaming API: {e}")
-        else:
-            self.logger.info("Timer start")
-            self.display_timer.start()
-            self.ui.actionStart.setText("Stop")
-            self.playback_widget.start_recording()
-            AudioBackend().restart()
-            self.dockmanager.restart()
-            
-            # Start streaming API
-            if self.streaming_integration:
-                try:
-                    self.streaming_integration.streaming_api.start_streaming()
-                except Exception as e:
-                    self.logger.error(f"Failed to start streaming API: {e}")
-
-
-def qt_message_handler(mode, context, message):
-    logger = logging.getLogger(__name__)
-    if mode == QtCore.QtInfoMsg:
-        logger.info(message)
-    elif mode == QtCore.QtWarningMsg:
-        logger.warning(message)
-    elif mode == QtCore.QtCriticalMsg:
-        logger.error(message)
-    elif mode == QtCore.QtFatalMsg:
-        logger.critical(message)
-    else:
-        logger.debug(message)
-
-
-class StreamToLogger(object):
+import time
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
+import numpy as np
+
+from PyQt5.QtCore import QObject, pyqtSignal
+
+from .data_types import (DataType, PitchData, FFTSpectrumData, OctaveSpectrumData,
+                        LevelsData, DelayEstimatorData, StreamingMetadata,
+                        create_streaming_data)
+from ..audiobackend import AudioBackend
+from .consumers import QObjectABCMeta
+
+class DataProducer(QObject, ABC, metaclass=QObjectABCMeta):
     """
-    Fake file-like stream object that redirects writes to a logger instance.
+    Abstract base class for data producers.
+    
+    All producers must implement the abstract methods and follow the
+    established patterns for data extraction and lifecycle management.
+    
+    Signals:
+        data_ready: Emitted when new data is available for streaming
+        started: Emitted when producer starts
+        stopped: Emitted when producer stops
+        error_occurred: Emitted when an error occurs
     """
-
-    def __init__(self, logger, log_level=logging.INFO):
-        self.logger = logger
-        self.log_level = log_level
-        self.linebuf = ''
-
-    def write(self, buf):
-        for line in buf.rstrip().splitlines():
-            self.logger.log(self.log_level, line.rstrip())
-
-    def flush(self):
+    
+    data_ready = pyqtSignal(object)  # StreamingData
+    started = pyqtSignal()
+    stopped = pyqtSignal()
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, widget, widget_id: str, parent=None):
+        super().__init__(parent)
+        
+        self.widget = widget
+        self.widget_id = widget_id
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self._is_active = False
+        self._sequence_number = 0
+        
+    @abstractmethod
+    def start(self) -> None:
+        """Start data production."""
         pass
-
-
-def main():
-    # parse command line arguments
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--python",
-        action="store_true",
-        help="Print data to friture.cprof")
-
-    parser.add_argument(
-        "--kcachegrind",
-        action="store_true")
-
-    parser.add_argument(
-        "--no-splash",
-        action="store_true",
-        help="Disable the splash screen on startup")
-
-    program_arguments, remaining_arguments = parser.parse_known_args()
-    remaining_arguments.insert(0, sys.argv[0])
-
-    # make the Python warnings go to Friture logger
-    logging.captureWarnings(True)
-
-    logFormat = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    formatter = logging.Formatter(logFormat)
-
-    logFileName = "friture.log.txt"
-    logDir = platformdirs.user_log_dir("Friture", "")
-    try:
-        os.makedirs(logDir)
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            raise
-    logFilePath = os.path.join(logDir, logFileName)
-
-    # log to file
-    fileHandler = logging.handlers.RotatingFileHandler(logFilePath, maxBytes=100000, backupCount=5)
-    fileHandler.setLevel(logging.DEBUG)
-    fileHandler.setFormatter(formatter)
-
-    rootLogger = logging.getLogger()
-    rootLogger.setLevel(logging.DEBUG)
-    rootLogger.addHandler(fileHandler)
-
-    if hasattr(sys, "frozen"):
-        # redirect stdout and stderr to the logger if this is a pyinstaller bundle
-        sys.stdout = StreamToLogger(logging.getLogger('STDOUT'), logging.INFO)
-        sys.stderr = StreamToLogger(logging.getLogger('STDERR'), logging.ERROR)
-    else:
-        # log to console if this is not a pyinstaller bundle
-        console = logging.StreamHandler()
-        console.setLevel(logging.DEBUG)
-        console.setFormatter(formatter)
-        rootLogger.addHandler(console)
-
-    # make Qt logs go to Friture logger
-    QtCore.qInstallMessageHandler(qt_message_handler)
-
-    logger = logging.getLogger(__name__)
-
-    logger.info("Friture %s starting on %s (%s)", friture.__version__, platform.system(), sys.platform)
-
-    logger.info("QML path: %s", qml_url(""))
-
-    if platform.system() == "Windows":
-        logger.info("Applying Windows-specific setup")
-
-        # enable automatic scaling for high-DPI screens
-        os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-
-        # set the App ID for Windows 7 to properly display the icon in the
-        # taskbar.
-        import ctypes
-        myappid = 'Friture.Friture.Friture.current'  # arbitrary string
+    
+    @abstractmethod
+    def stop(self) -> None:
+        """Stop data production."""
+        pass
+    
+    @abstractmethod
+    def extract_data(self) -> Any:
+        """Extract data from the widget."""
+        pass
+    
+    def get_metadata(self) -> StreamingMetadata:
+        """
+        Get metadata for the current data.
+        
+        Returns:
+            StreamingMetadata instance
+        """
+        backend = AudioBackend()
+        
+        return StreamingMetadata(
+            timestamp=time.time(),
+            stream_time=backend.get_stream_time(),
+            sample_rate=backend.SAMPLING_RATE if hasattr(backend, 'SAMPLING_RATE') else 48000,
+            channels=backend.get_current_device_nchannels() if hasattr(backend, 'get_current_device_nchannels') else 1,
+            data_type=self.get_data_type(),
+            sequence_number=self._sequence_number,
+            widget_id=self.widget_id,
+            custom_metadata=self.get_custom_metadata()
+        )
+    
+    @abstractmethod
+    def get_data_type(self) -> DataType:
+        """Get the data type this producer generates."""
+        pass
+    
+    def get_custom_metadata(self) -> Dict[str, Any]:
+        """
+        Get custom metadata specific to this producer.
+        
+        Returns:
+            Dictionary of custom metadata
+        """
+        return {}
+    
+    def _emit_data(self, data_payload: Any) -> None:
+        """
+        Emit data with proper metadata.
+        
+        Args:
+            data_payload: The extracted data
+        """
         try:
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except:
-            logger.error("Could not set the app model ID. If the plaftorm is older than Windows 7, this is normal.")
+            streaming_data = create_streaming_data(
+                data_type=self.get_data_type(),
+                widget_id=self.widget_id,
+                data_payload=data_payload,
+                stream_time=AudioBackend().get_stream_time(),
+                sample_rate=48000,  # Default, should be overridden
+                channels=1,  # Default, should be overridden
+                sequence_number=self._sequence_number,
+                custom_metadata=self.get_custom_metadata()
+            )
+            
+            self._sequence_number += 1
+            self.data_ready.emit(streaming_data)
+            
+        except Exception as e:
+            self.logger.error(f"Error emitting data: {e}")
+            self.error_occurred.emit(str(e))
 
-    app = QApplication(remaining_arguments)
 
-    if platform.system() == "Darwin":
-        logger.info("Applying Mac OS-specific setup")
-        # help the packaged application find the Qt plugins (imageformats and platforms)
-        pluginsPath = os.path.normpath(os.path.join(QApplication.applicationDirPath(), os.path.pardir, 'PlugIns'))
-        logger.info("Adding the following to the Library paths: %s", pluginsPath)
-        QApplication.addLibraryPath(pluginsPath)
+class PitchTrackerProducer(DataProducer):
+    """
+    Producer for pitch tracking data.
+    
+    Extracts fundamental frequency detection results from the pitch tracker
+    widget, including confidence metrics and musical note information.
+    """
+    
+    def __init__(self, pitch_widget, widget_id: str, parent=None):
+        super().__init__(pitch_widget, widget_id, parent)
+        
+    def start(self) -> None:
+        """Start producing pitch data."""
+        if self._is_active:
+            return
+        
+        self._is_active = True
+        
+        self.started.emit()
+        self.logger.info("PitchTrackerProducer started")
+    
+    def stop(self) -> None:
+        """Stop producing pitch data."""
+        if not self._is_active:
+            return
+        
+        self._is_active = False
+        
+        self.stopped.emit()
+        self.logger.info("PitchTrackerProducer stopped")
+    
+    def _process_data_from_widget(self, floatdata) -> None:
+        """Process data from widget after it has been updated with new audio data."""
+        if not self._is_active:
+            return
+        
+        try:
+            # We extract the results after processing
+            data = self.extract_data()
+            if data is not None:
+                self._emit_data(data)
+        except Exception as e:
+            self.logger.error(f"Error processing pitch data: {e}")
+            self.error_occurred.emit(str(e))
+    
+    def extract_data(self) -> Optional[PitchData]:
+        """Extract pitch data from the widget."""
+        try:
+            if not hasattr(self.widget, 'tracker'):
+                return None
+            
+            tracker = self.widget.tracker
+            
+            # Get the latest pitch estimate
+            latest_pitch = tracker.get_latest_estimate()
+            
+            # Calculate confidence based on signal strength and harmonic clarity
+            # This is a simplified confidence metric
+            confidence = 0.8 if latest_pitch and not np.isnan(latest_pitch) else 0.0
+            
+            # Convert frequency to note name
+            note_name = None
+            if latest_pitch and not np.isnan(latest_pitch):
+                from ..pitch_tracker_data import frequency_to_note
+                note_name = frequency_to_note(latest_pitch)
+            
+            # Estimate amplitude (simplified)
+            amplitude_db = -20.0  # Default value, could be improved
+            
+            # Harmonic clarity (simplified)
+            harmonic_clarity = confidence  # Simplified correlation
+            
+            return PitchData(
+                frequency_hz=latest_pitch if latest_pitch and not np.isnan(latest_pitch) else None,
+                confidence=confidence,
+                note_name=note_name,
+                amplitude_db=amplitude_db,
+                harmonic_clarity=harmonic_clarity
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting pitch data: {e}")
+            return None
+    
+    def get_data_type(self) -> DataType:
+        """Get the data type this producer generates."""
+        return DataType.PITCH_TRACKER
+    
+    def get_custom_metadata(self) -> Dict[str, Any]:
+        """Get pitch tracker specific metadata."""
+        metadata = {}
+        
+        if hasattr(self.widget, 'tracker'):
+            metadata.update({
+                'fft_size': getattr(self.widget.tracker, 'fft_size', 0),
+                'overlap': getattr(self.widget.tracker, 'overlap', 0.0),
+                'min_db': getattr(self.widget.tracker, 'min_db', -70.0),
+                'min_freq': getattr(self.widget, 'min_freq', 80),
+                'max_freq': getattr(self.widget, 'max_freq', 1000)
+            })
+        
+        return metadata
 
-    if platform.system() == "Linux":
-        if "PIPEWIRE_ALSA" not in os.environ:
-            os.environ['PIPEWIRE_ALSA'] = '{ application.name = "Friture" }'
 
-    # Set the style for Qt Quick Controls
-    # We choose the Fusion style as it is a desktop-oriented style
-    # It uses the standard system palettes to provide colors that match the desktop environment.
-    os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
+class FFTSpectrumProducer(DataProducer):
+    """
+    Producer for FFT spectrum data.
+    
+    Extracts frequency domain analysis results from the spectrum widget,
+    including magnitude spectrum, phase information, and peak detection.
+    """
+    
+    def __init__(self, spectrum_widget, widget_id: str, parent=None):
+        super().__init__(spectrum_widget, widget_id, parent)
+        
+    def start(self) -> None:
+        """Start producing FFT spectrum data."""
+        if self._is_active:
+            return
+        
+        self._is_active = True
+        
+        # Connect to the widget's data processing
+        if hasattr(self.widget, 'audiobuffer'):
+            self.widget.audiobuffer.new_data_available.connect(self._on_new_audio_data)
+        
+        self.started.emit()
+        self.logger.info("FFTSpectrumProducer started")
+    
+    def stop(self) -> None:
+        """Stop producing FFT spectrum data."""
+        if not self._is_active:
+            return
+        
+        self._is_active = False
+        
+        if hasattr(self.widget, 'audiobuffer'):
+            try:
+                self.widget.audiobuffer.new_data_available.disconnect(self._on_new_audio_data)
+            except TypeError:
+                pass
+        
+        self.stopped.emit()
+        self.logger.info("FFTSpectrumProducer stopped")
+    
+    def _on_new_audio_data(self, floatdata) -> None:
+        """Handle new audio data and extract FFT information."""
+        if not self._is_active:
+            return
+        
+        try:
+            data = self.extract_data()
+            if data is not None:
+                self._emit_data(data)
+        except Exception as e:
+            self.logger.error(f"Error processing FFT data: {e}")
+            self.error_occurred.emit(str(e))
+    
+    def extract_data(self) -> Optional[FFTSpectrumData]:
+        """Extract FFT spectrum data from the widget."""
+        try:
+            if not hasattr(self.widget, 'proc') or not hasattr(self.widget, 'freq'):
+                return None
+            
+            proc = self.widget.proc
+            frequencies = self.widget.freq.copy()
+            
+            # Get the latest spectrum data
+            # This would need to be adapted based on how the spectrum widget stores its data
+            if hasattr(self.widget, 'PlotZoneSpect') and hasattr(self.widget.PlotZoneSpect, '_spectrum_data'):
+                spectrum_data = self.widget.PlotZoneSpect._spectrum_data
+                
+                # Extract magnitude data from the plot items
+                if spectrum_data.plot_items and len(spectrum_data._plot_items) > 0:
+                    curve = spectrum_data._plot_items[0]
+                    if hasattr(curve, 'y_array'):
+                        # Convert normalized plot coordinates back to dB values
+                        magnitudes_db = curve.y_array().copy()
+                        
+                        # Get processing parameters
+                        fft_size = getattr(proc, 'fft_size', 1024)
+                        window_type = "hann"  # Default window type
+                        overlap_factor = getattr(self.widget, 'overlap', 0.75)
+                        weighting = self._get_weighting_string()
+                        
+                        # Find peak
+                        if len(magnitudes_db) > 0:
+                            peak_idx = np.argmax(magnitudes_db)
+                            peak_frequency = frequencies[peak_idx] if peak_idx < len(frequencies) else 0.0
+                            peak_magnitude = magnitudes_db[peak_idx]
+                        else:
+                            peak_frequency = 0.0
+                            peak_magnitude = -np.inf
+                        
+                        return FFTSpectrumData(
+                            frequencies=frequencies,
+                            magnitudes_db=magnitudes_db,
+                            phases=None,  # Phase data not typically stored in spectrum widget
+                            fft_size=fft_size,
+                            window_type=window_type,
+                            overlap_factor=overlap_factor,
+                            weighting=weighting,
+                            peak_frequency=peak_frequency,
+                            peak_magnitude=peak_magnitude
+                        )
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting FFT data: {e}")
+            return None
+    
+    def _get_weighting_string(self) -> str:
+        """Get the current frequency weighting as a string."""
+        weighting_map = {0: "none", 1: "A", 2: "B", 3: "C"}
+        weighting_index = getattr(self.widget, 'weighting', 0)
+        return weighting_map.get(weighting_index, "none")
+    
+    def get_data_type(self) -> DataType:
+        """Get the data type this producer generates."""
+        return DataType.FFT_SPECTRUM
+    
+    def get_custom_metadata(self) -> Dict[str, Any]:
+        """Get FFT spectrum specific metadata."""
+        metadata = {}
+        
+        if hasattr(self.widget, 'proc'):
+            proc = self.widget.proc
+            metadata.update({
+                'fft_size': getattr(proc, 'fft_size', 0),
+                'window_type': 'hann',
+                'overlap_factor': getattr(self.widget, 'overlap', 0.0),
+                'weighting': self._get_weighting_string(),
+                'min_freq': getattr(self.widget, 'minfreq', 0),
+                'max_freq': getattr(self.widget, 'maxfreq', 22000),
+                'spec_min_db': getattr(self.widget, 'spec_min', -100),
+                'spec_max_db': getattr(self.widget, 'spec_max', 0)
+            })
+        
+        return metadata
 
-    # Splash screen
-    if not program_arguments.no_splash:
-        pixmap = QPixmap(":/images/splash.png")
-        splash = QSplashScreen(pixmap)
-        splash.show()
-        splash.showMessage("Initializing the audio subsystem")
-        app.processEvents()
 
-    window = Friture()
-    window.show()
-    if not program_arguments.no_splash:
-        splash.finish(window)
+class OctaveSpectrumProducer(DataProducer):
+    """
+    Producer for octave spectrum data.
+    
+    Extracts octave band analysis results from the octave spectrum widget,
+    including energy measurements in standardized frequency bands.
+    """
+    
+    def __init__(self, octave_widget, widget_id: str, parent=None):
+        super().__init__(octave_widget, widget_id, parent)
+        
+    def start(self) -> None:
+        """Start producing octave spectrum data."""
+        if self._is_active:
+            return
+        
+        self._is_active = True
+        
+        if hasattr(self.widget, 'audiobuffer'):
+            self.widget.audiobuffer.new_data_available.connect(self._on_new_audio_data)
+        
+        self.started.emit()
+        self.logger.info("OctaveSpectrumProducer started")
+    
+    def stop(self) -> None:
+        """Stop producing octave spectrum data."""
+        if not self._is_active:
+            return
+        
+        self._is_active = False
+        
+        if hasattr(self.widget, 'audiobuffer'):
+            try:
+                self.widget.audiobuffer.new_data_available.disconnect(self._on_new_audio_data)
+            except TypeError:
+                pass
+        
+        self.stopped.emit()
+        self.logger.info("OctaveSpectrumProducer stopped")
+    
+    def _on_new_audio_data(self, floatdata) -> None:
+        """Handle new audio data and extract octave spectrum information."""
+        if not self._is_active:
+            return
+        
+        try:
+            data = self.extract_data()
+            if data is not None:
+                self._emit_data(data)
+        except Exception as e:
+            self.logger.error(f"Error processing octave spectrum data: {e}")
+            self.error_occurred.emit(str(e))
+    
+    def extract_data(self) -> Optional[OctaveSpectrumData]:
+        """Extract octave spectrum data from the widget."""
+        try:
+            if not hasattr(self.widget, 'filters') or not hasattr(self.widget, 'dispbuffers'):
+                return None
+            
+            filters = self.widget.filters
+            
+            # Get current band energies
+            band_energies = np.array(self.widget.dispbuffers)
+            
+            # Convert to dB
+            epsilon = 1e-30
+            band_energies_db = 10.0 * np.log10(band_energies + epsilon)
+            
+            # Apply weighting
+            weighting_index = getattr(self.widget, 'weighting', 0)
+            if weighting_index == 1:  # A-weighting
+                band_energies_db += filters.A
+            elif weighting_index == 2:  # B-weighting
+                band_energies_db += filters.B
+            elif weighting_index == 3:  # C-weighting
+                band_energies_db += filters.C
+            
+            # Calculate overall level
+            overall_level = 10.0 * np.log10(np.sum(band_energies) + epsilon)
+            
+            return OctaveSpectrumData(
+                center_frequencies=filters.fi.copy(),
+                band_energies_db=band_energies_db,
+                band_labels=getattr(filters, 'f_nominal', []),
+                bands_per_octave=getattr(filters, 'bandsperoctave', 3),
+                weighting=self._get_weighting_string(),
+                response_time=getattr(self.widget, 'response_time', 1.0),
+                overall_level=overall_level
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting octave spectrum data: {e}")
+            return None
+    
+    def _get_weighting_string(self) -> str:
+        """Get the current frequency weighting as a string."""
+        weighting_map = {0: "none", 1: "A", 2: "B", 3: "C"}
+        weighting_index = getattr(self.widget, 'weighting', 0)
+        return weighting_map.get(weighting_index, "none")
+    
+    def get_data_type(self) -> DataType:
+        """Get the data type this producer generates."""
+        return DataType.OCTAVE_SPECTRUM
+    
+    def get_custom_metadata(self) -> Dict[str, Any]:
+        """Get octave spectrum specific metadata."""
+        metadata = {}
+        
+        if hasattr(self.widget, 'filters'):
+            filters = self.widget.filters
+            metadata.update({
+                'bands_per_octave': getattr(filters, 'bandsperoctave', 3),
+                'total_bands': getattr(filters, 'nbands', 0),
+                'weighting': self._get_weighting_string(),
+                'response_time': getattr(self.widget, 'response_time', 1.0),
+                'spec_min_db': getattr(self.widget, 'spec_min', -80),
+                'spec_max_db': getattr(self.widget, 'spec_max', -20)
+            })
+        
+        return metadata
 
-    profile = "no"  # "python" or "kcachegrind" or anything else to disable
 
-    if program_arguments.python:
-        profile = "python"
-    elif program_arguments.kcachegrind:
-        profile = "kcachegrind"
+class LevelsProducer(DataProducer):
+    """
+    Producer for audio level data.
+    
+    Extracts peak and RMS level measurements from the levels widget,
+    including ballistic characteristics and multi-channel support.
+    """
+    
+    def __init__(self, levels_widget, widget_id: str, parent=None):
+        super().__init__(levels_widget, widget_id, parent)
+        
+    def start(self) -> None:
+        """Start producing levels data."""
+        if self._is_active:
+            return
+        
+        self._is_active = True
+        
+        if hasattr(self.widget, 'audiobuffer'):
+            self.widget.audiobuffer.new_data_available.connect(self._on_new_audio_data)
+        
+        self.started.emit()
+        self.logger.info("LevelsProducer started")
+    
+    def stop(self) -> None:
+        """Stop producing levels data."""
+        if not self._is_active:
+            return
+        
+        self._is_active = False
+        
+        if hasattr(self.widget, 'audiobuffer'):
+            try:
+                self.widget.audiobuffer.new_data_available.disconnect(self._on_new_audio_data)
+            except TypeError:
+                pass
+        
+        self.stopped.emit()
+        self.logger.info("LevelsProducer stopped")
+    
+    def _on_new_audio_data(self, floatdata) -> None:
+        """Handle new audio data and extract levels information."""
+        if not self._is_active:
+            return
+        
+        try:
+            data = self.extract_data()
+            if data is not None:
+                self._emit_data(data)
+        except Exception as e:
+            self.logger.error(f"Error processing levels data: {e}")
+            self.error_occurred.emit(str(e))
+    
+    def extract_data(self) -> Optional[LevelsData]:
+        """Extract levels data from the widget."""
+        try:
+            if not hasattr(self.widget, 'level_view_model'):
+                return None
+            
+            view_model = self.widget.level_view_model
+            
+            # Extract level data
+            peak_levels = [view_model.level_data.level_max]
+            rms_levels = [view_model.level_data.level_rms]
+            peak_hold_levels = [view_model.level_data_ballistic.peak_iec * 100 - 100]  # Convert IEC to dB
+            
+            channel_labels = ["Ch1"]
+            
+            # Add second channel if available
+            if view_model.two_channels:
+                peak_levels.append(view_model.level_data_2.level_max)
+                rms_levels.append(view_model.level_data_2.level_rms)
+                peak_hold_levels.append(view_model.level_data_ballistic_2.peak_iec * 100 - 100)
+                channel_labels.append("Ch2")
+            
+            return LevelsData(
+                peak_levels_db=np.array(peak_levels),
+                rms_levels_db=np.array(rms_levels),
+                peak_hold_levels_db=np.array(peak_hold_levels),
+                channel_labels=channel_labels,
+                integration_time=getattr(self.widget, 'response_time', 0.3),
+                peak_hold_time=0.025  # Default peak hold time
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting levels data: {e}")
+            return None
+    
+    def get_data_type(self) -> DataType:
+        """Get the data type this producer generates."""
+        return DataType.LEVELS
+    
+    def get_custom_metadata(self) -> Dict[str, Any]:
+        """Get levels specific metadata."""
+        return {
+            'response_time': getattr(self.widget, 'response_time', 0.3),
+            'two_channels': getattr(self.widget, 'two_channels', False)
+        }
 
-    return_code = 0
-    if profile == "python":
-        import cProfile
-        import pstats
 
-        # friture.cprof can be visualized with SnakeViz
-        # http://jiffyclub.github.io/snakeviz/
-        # snakeviz friture.cprof
-        cProfile.runctx('app.exec_()', globals(), locals(), filename="friture.cprof")
-
-        logger.info("Profile saved to '%s'", "friture.cprof")
-
-        stats = pstats.Stats("friture.cprof")
-        stats.strip_dirs().sort_stats('time').print_stats(20)
-        stats.strip_dirs().sort_stats('cumulative').print_stats(20)
-    elif profile == "kcachegrind":
-        import cProfile
-        import lsprofcalltree
-
-        p = cProfile.Profile()
-        p.run('app.exec_()')
-
-        k = lsprofcalltree.KCacheGrind(p)
-        with open('cachegrind.out.00000', 'wb') as data:
-            k.output(data)
-    else:
-        return_code = app.exec_()
-
-    # explicitly delete the main windows instead of waiting for the interpreter shutdown
-    # tentative to prevent errors on exit on macos
-    del window
-
-    sys.exit(return_code)
+class DelayEstimatorProducer(DataProducer):
+    """
+    Producer for delay estimation data.
+    
+    Extracts cross-correlation delay estimation results from the delay
+    estimator widget, including confidence metrics and polarity information.
+    """
+    
+    def __init__(self, delay_widget, widget_id: str, parent=None):
+        super().__init__(delay_widget, widget_id, parent)
+        
+    def start(self) -> None:
+        """Start producing delay estimation data."""
+        if self._is_active:
+            return
+        
+        self._is_active = True
+        
+        if hasattr(self.widget, 'audiobuffer'):
+            self.widget.audiobuffer.new_data_available.connect(self._on_new_audio_data)
+        
+        self.started.emit()
+        self.logger.info("DelayEstimatorProducer started")
+    
+    def stop(self) -> None:
+        """Stop producing delay estimation data."""
+        if not self._is_active:
+            return
+        
+        self._is_active = False
+        
+        if hasattr(self.widget, 'audiobuffer'):
+            try:
+                self.widget.audiobuffer.new_data_available.disconnect(self._on_new_audio_data)
+            except TypeError:
+                pass
+        
+        self.stopped.emit()
+        self.logger.info("DelayEstimatorProducer stopped")
+    
+    def _on_new_audio_data(self, floatdata) -> None:
+        """Handle new audio data and extract delay estimation information."""
+        if not self._is_active:
+            return
+        
+        try:
+            data = self.extract_data()
+            if data is not None:
+                self._emit_data(data)
+        except Exception as e:
+            self.logger.error(f"Error processing delay estimation data: {e}")
+            self.error_occurred.emit(str(e))
+    
+    def extract_data(self) -> Optional[DelayEstimatorData]:
+        """Extract delay estimation data from the widget."""
+        try:
+            # Extract current delay estimation results
+            delay_ms = getattr(self.widget, 'delay_ms', 0.0)
+            distance_m = getattr(self.widget, 'distance_m', 0.0)
+            correlation = getattr(self.widget, 'correlation', 0.0)
+            xcorr_extremum = getattr(self.widget, 'Xcorr_extremum', 0.0)
+            
+            # Determine polarity
+            if xcorr_extremum >= 0:
+                polarity = "in_phase"
+            elif xcorr_extremum < 0:
+                polarity = "reversed"
+            else:
+                polarity = "unknown"
+            
+            # Convert correlation percentage to confidence
+            confidence = correlation / 100.0 if correlation > 0 else 0.0
+            
+            # Calculate delay in samples
+            sample_rate = AudioBackend().SAMPLING_RATE if hasattr(AudioBackend(), 'SAMPLING_RATE') else 48000
+            delay_samples = int(delay_ms * sample_rate / 1000.0)
+            
+            return DelayEstimatorData(
+                delay_ms=delay_ms,
+                delay_samples=delay_samples,
+                confidence=confidence,
+                correlation_peak=abs(xcorr_extremum),
+                polarity=polarity,
+                distance_m=distance_m
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting delay estimation data: {e}")
+            return None
+    
+    def get_data_type(self) -> DataType:
+        """Get the data type this producer generates."""
+        return DataType.DELAY_ESTIMATOR
+    
+    def get_custom_metadata(self) -> Dict[str, Any]:
+        """Get delay estimator specific metadata."""
+        return {
+            'delay_range_s': getattr(self.widget, 'delayrange_s', 1.0),
+            'two_channels': getattr(self.widget, 'two_channels', False),
+            'subsampled_rate': getattr(self.widget, 'subsampled_sampling_rate', 12000)
+        }

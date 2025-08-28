@@ -5,10 +5,18 @@
 Friture Streaming Information Visualizer
 
 A real-time GUI application for visualizing Friture's streaming API data.
-Displays beautiful visualizations for all data types alongside raw message data.
+Displays beautiful visualizations for all available data types alongside the latest raw message.
+Features crash-resistant design with memory-efficient message handling and copy functionality.
 
 Usage:
     python stream_information_visualiser.py --host localhost --port 8765
+
+Features:
+- Real-time visualizations for all Friture data types (levels, spectrum, pitch, octave, scope, delay)
+- Memory-efficient raw message display (shows only the latest message)
+- Copy-to-clipboard functionality for raw messages
+- Comprehensive statistics and connection monitoring
+- Crash-resistant design with proper error handling
 """
 
 import sys
@@ -535,20 +543,278 @@ class PitchVisualization(BaseVisualizationWidget):
             painter.drawText(x_offset, y_offset + 55, f"Confidence: {self.confidence:.2f}")
 
 
-class RawMessageDisplay(QGroupBox):
-    """Widget for displaying raw JSON messages."""
+class OctaveSpectrumVisualization(BaseVisualizationWidget):
+    """Visualization for octave spectrum data."""
 
     def __init__(self, parent=None):
-        super().__init__("Raw Messages", parent)
+        super().__init__("octave_spectrum", "Octave Spectrum", parent)
+        self.center_frequencies = np.array([])
+        self.band_energies = np.array([])
+        self.band_labels = []
+
+    def update_display(self):
+        """Update the octave spectrum display."""
+        if not self.latest_data or 'data' not in self.latest_data:
+            return
+
+        data = self.latest_data['data']
+
+        # Extract octave spectrum data
+        self.center_frequencies = np.array(data.get('center_frequencies', []))
+        self.band_energies = np.array(data.get('band_energies_db', []))
+        self.band_labels = data.get('band_labels', [])
+
+        # Trigger repaint
+        self.update()
+
+    def paintEvent(self, a0):
+        """Paint the octave spectrum visualization."""
+        super().paintEvent(a0)
+
+        if len(self.center_frequencies) == 0 or len(self.band_energies) == 0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Get widget dimensions
+        width = self.width() - 20
+        height = self.height() - 80
+        x_offset = 10
+        y_offset = 60
+
+        # Draw bars
+        bar_width = width // len(self.band_energies)
+        max_energy = 0  # 0 dB is maximum
+        min_energy = -60  # -60 dB is minimum
+
+        for i, (freq, energy) in enumerate(zip(self.center_frequencies, self.band_energies)):
+            # Calculate bar height (0 dB = full height, -60 dB = 0 height)
+            bar_height = int((max(min_energy, min(max_energy, energy)) - min_energy) / (max_energy - min_energy) * height)
+
+            x = x_offset + i * bar_width
+
+            # Draw bar
+            painter.setPen(QPen(QColor(150, 100, 200), 2))
+            painter.setBrush(QBrush(QColor(150, 100, 200, 128)))
+            painter.drawRect(x, y_offset + height - bar_height, bar_width - 2, bar_height)
+
+            # Draw frequency label
+            painter.setPen(QPen(Qt.black))
+            painter.setFont(QFont("Arial", 8))
+            if i < len(self.band_labels):
+                painter.drawText(x, y_offset + height + 12, self.band_labels[i])
+            else:
+                painter.drawText(x, y_offset + height + 12, f"{freq:.0f}Hz")
+
+
+class ScopeVisualization(BaseVisualizationWidget):
+    """Visualization for scope (time-domain) data."""
+
+    def __init__(self, parent=None):
+        super().__init__("scope", "Audio Scope", parent)
+        self.timestamps = np.array([])
+        self.samples = np.array([])
+
+    def update_display(self):
+        """Update the scope display."""
+        if not self.latest_data or 'data' not in self.latest_data:
+            return
+
+        data = self.latest_data['data']
+
+        # Extract scope data
+        self.timestamps = np.array(data.get('timestamps', []))
+        samples_data = data.get('samples', [])
+        if samples_data:
+            self.samples = np.array(samples_data)
+
+        # Trigger repaint
+        self.update()
+
+    def paintEvent(self, a0):
+        """Paint the scope visualization."""
+        super().paintEvent(a0)
+
+        if len(self.timestamps) == 0 or len(self.samples) == 0:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Get widget dimensions
+        width = self.width() - 20
+        height = self.height() - 80
+        x_offset = 10
+        y_offset = 60
+
+        # Draw waveform
+        painter.setPen(QPen(QColor(0, 150, 200), 2))
+
+        path = QPainterPath()
+        path.moveTo(x_offset, y_offset + height // 2)
+
+        # Use first channel if multi-channel
+        if len(self.samples.shape) > 1:
+            waveform = self.samples[0]
+        else:
+            waveform = self.samples
+
+        # Normalize and scale
+        if len(waveform) > 0:
+            max_val = np.max(np.abs(waveform))
+            if max_val > 0:
+                waveform = waveform / max_val
+
+            # Draw waveform
+            step = max(1, len(waveform) // width)
+            for i in range(0, len(waveform), step):
+                if i < len(waveform):
+                    x = x_offset + (i * width) // len(waveform)
+                    y = y_offset + int((1 - waveform[i]) * height // 2)
+                    if i == 0:
+                        path.moveTo(x, y)
+                    else:
+                        path.lineTo(x, y)
+
+            painter.drawPath(path)
+
+            # Draw center line
+            painter.setPen(QPen(QColor(200, 200, 200), 1, Qt.DashLine))
+            painter.drawLine(x_offset, y_offset + height // 2, x_offset + width, y_offset + height // 2)
+
+
+class DelayEstimatorVisualization(BaseVisualizationWidget):
+    """Visualization for delay estimation data."""
+
+    def __init__(self, parent=None):
+        super().__init__("delay_estimator", "Delay Estimator", parent)
+        self.delay_ms = 0.0
+        self.confidence = 0.0
+        self.distance_m = 0.0
+
+    def update_display(self):
+        """Update the delay estimator display."""
+        if not self.latest_data or 'data' not in self.latest_data:
+            return
+
+        data = self.latest_data['data']
+
+        # Extract delay data
+        self.delay_ms = data.get('delay_ms', 0.0)
+        self.confidence = data.get('confidence', 0.0)
+        self.distance_m = data.get('distance_m', 0.0)
+
+        # Trigger repaint
+        self.update()
+
+    def paintEvent(self, a0):
+        """Paint the delay estimator visualization."""
+        super().paintEvent(a0)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Get widget dimensions
+        width = self.width() - 20
+        height = self.height() - 80
+        x_offset = 10
+        y_offset = 60
+
+        # Draw delay information
+        painter.setPen(QPen(Qt.black))
+        font = QFont("Arial", 16, QFont.Bold)
+        painter.setFont(font)
+
+        delay_text = f"Delay: {self.delay_ms:.2f} ms"
+        painter.drawText(x_offset, y_offset + 30, delay_text)
+
+        if self.distance_m > 0:
+            distance_text = f"Distance: {self.distance_m:.2f} m"
+            painter.drawText(x_offset, y_offset + 60, distance_text)
+
+        # Draw confidence meter
+        if self.confidence > 0:
+            # Confidence bar
+            bar_width = width - 20
+            bar_height = 20
+            confidence_width = int(self.confidence * bar_width)
+
+            # Background
+            painter.setPen(QPen(QColor(200, 200, 200), 1))
+            painter.setBrush(QBrush(QColor(240, 240, 240)))
+            painter.drawRect(x_offset, y_offset + 80, bar_width, bar_height)
+
+            # Fill
+            color = QColor(100, 200, 100) if self.confidence > 0.7 else QColor(200, 200, 100)
+            painter.setBrush(QBrush(color))
+            painter.drawRect(x_offset, y_offset + 80, confidence_width, bar_height)
+
+            # Label
+            painter.setPen(QPen(Qt.black))
+            small_font = QFont("Arial", 10)
+            painter.setFont(small_font)
+            painter.drawText(x_offset, y_offset + 75, f"Confidence: {self.confidence:.2f}")
+
+
+class SpectrogramVisualization(BaseVisualizationWidget):
+    """Visualization for spectrogram data (placeholder - currently not working)."""
+
+    def __init__(self, parent=None):
+        super().__init__("spectrogram", "Spectrogram (Not Available)", parent)
+
+    def update_display(self):
+        """Update the spectrogram display."""
+        if not self.latest_data or 'data' not in self.latest_data:
+            return
+
+        # Mark as having received data but can't display it
+        self.status_label.setText("Data received but visualization not available")
+        self.status_label.setStyleSheet("color: #ff6600;")
+
+    def paintEvent(self, a0):
+        """Paint the spectrogram placeholder."""
+        super().paintEvent(a0)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Get widget dimensions
+        width = self.width() - 20
+        height = self.height() - 80
+        x_offset = 10
+        y_offset = 60
+
+        # Draw placeholder message
+        painter.setPen(QPen(QColor(255, 102, 0), 2))
+        painter.setFont(QFont("Arial", 12, QFont.Bold))
+        painter.drawText(x_offset, y_offset + 40, "Spectrogram visualization not available")
+        painter.drawText(x_offset, y_offset + 60, "due to streaming API issue")
+
+
+class RawMessageDisplay(QGroupBox):
+    """Widget for displaying the last raw JSON message with copy functionality."""
+
+    def __init__(self, parent=None):
+        super().__init__("Last Raw Message", parent)
+
+        # Store the last message
+        self.last_message = ""
+        self.last_timestamp = ""
 
         # Layout
         layout = QVBoxLayout(self)
 
-        # Text area for raw messages
+        # Info label
+        info_label = QLabel("Only the most recent message is shown below:")
+        info_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(info_label)
+
+        # Text area for the last message only
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setFont(QFont("Courier New", 9))
-        self.text_edit.setMaximumHeight(300)
+        self.text_edit.setMaximumHeight(250)
 
         # Set dark theme for JSON
         self.text_edit.setStyleSheet("""
@@ -562,34 +828,95 @@ class RawMessageDisplay(QGroupBox):
 
         layout.addWidget(self.text_edit)
 
+        # Button layout
+        button_layout = QHBoxLayout()
+
+        # Copy button
+        self.copy_button = QPushButton("📋 Copy Message")
+        self.copy_button.clicked.connect(self.copy_message)
+        self.copy_button.setToolTip("Copy the current message to clipboard")
+        button_layout.addWidget(self.copy_button)
+
         # Clear button
-        clear_button = QPushButton("Clear")
+        clear_button = QPushButton("🗑️ Clear")
         clear_button.clicked.connect(self.clear_messages)
-        layout.addWidget(clear_button)
+        clear_button.setToolTip("Clear the current message")
+        button_layout.addWidget(clear_button)
+
+        layout.addLayout(button_layout)
+
+        # Status label
+        self.status_label = QLabel("No messages received yet")
+        self.status_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(self.status_label)
 
     def add_message(self, message: str):
-        """Add a new raw message."""
-        # Format JSON for better readability
+        """Update with the latest raw message (replaces previous)."""
         try:
-            parsed = json.loads(message)
-            formatted = json.dumps(parsed, indent=2)
-        except:
-            formatted = message
+            # Store the raw message
+            self.last_message = message
+            self.last_timestamp = time.strftime("%H:%M:%S.%f")[:-3]  # Include milliseconds
 
-        # Add timestamp
-        timestamp = time.strftime("%H:%M:%S")
-        display_text = f"[{timestamp}]\n{formatted}\n\n"
+            # Format JSON for better readability
+            try:
+                parsed = json.loads(message)
+                formatted = json.dumps(parsed, indent=2)
+            except json.JSONDecodeError:
+                formatted = message
 
-        # Append to text area
-        self.text_edit.append(display_text)
+            # Create display text
+            display_text = f"[{self.last_timestamp}]\n{formatted}"
 
-        # Auto-scroll to bottom
-        scrollbar = self.text_edit.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+            # Set the text (replace entirely)
+            self.text_edit.setPlainText(display_text)
+
+            # Update status
+            self.status_label.setText(f"Last message received at {self.last_timestamp}")
+            self.status_label.setStyleSheet("color: #006600; font-size: 10px;")
+
+            # Enable copy button
+            self.copy_button.setEnabled(True)
+
+        except Exception as e:
+            logger.error(f"Error displaying message: {e}")
+            error_text = f"[{time.strftime('%H:%M:%S')}]\nError displaying message: {str(e)}\n\nRaw: {message[:200]}..."
+            self.text_edit.setPlainText(error_text)
+
+    def copy_message(self):
+        """Copy the current message to clipboard."""
+        try:
+            from PyQt5.QtWidgets import QApplication
+            clipboard = QApplication.clipboard()
+
+            # Copy the raw JSON message
+            clipboard.setText(self.last_message)
+
+            # Update status temporarily
+            original_text = self.status_label.text()
+            self.status_label.setText("✅ Message copied to clipboard!")
+            self.status_label.setStyleSheet("color: #009900; font-size: 10px; font-weight: bold;")
+
+            # Reset status after 2 seconds
+            QTimer.singleShot(2000, lambda: self._reset_status(original_text))
+
+        except Exception as e:
+            logger.error(f"Error copying message: {e}")
+            self.status_label.setText("❌ Failed to copy message")
+            self.status_label.setStyleSheet("color: #990000; font-size: 10px;")
+
+    def _reset_status(self, original_text):
+        """Reset status label to original text."""
+        self.status_label.setText(original_text)
+        self.status_label.setStyleSheet("color: #666; font-size: 10px;")
 
     def clear_messages(self):
-        """Clear all messages."""
+        """Clear the current message."""
+        self.last_message = ""
+        self.last_timestamp = ""
         self.text_edit.clear()
+        self.status_label.setText("Message cleared")
+        self.status_label.setStyleSheet("color: #666; font-size: 10px;")
+        self.copy_button.setEnabled(False)
 
 
 class StatisticsPanel(QGroupBox):
@@ -690,8 +1017,11 @@ class DataVisualizationArea(QWidget):
         widget_classes = {
             'levels': LevelsVisualization,
             'fft_spectrum': SpectrumVisualization,
+            'octave_spectrum': OctaveSpectrumVisualization,
             'pitch_tracker': PitchVisualization,
-            # Add more as needed
+            'scope': ScopeVisualization,
+            'delay_estimator': DelayEstimatorVisualization,
+            'spectrogram': SpectrogramVisualization,  # Placeholder for now
         }
 
         for data_type, widget_class in widget_classes.items():
@@ -716,8 +1046,8 @@ class StreamVisualizerWindow(QMainWindow):
         self.websocket_client = websocket_client
 
         # Setup UI
-        self.setWindowTitle("Friture Streaming Visualizer")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setWindowTitle("Friture Streaming Visualizer - All Data Types")
+        self.setGeometry(100, 100, 1400, 900)
 
         # Create central widget
         central_widget = QWidget()
@@ -794,9 +1124,19 @@ class StreamVisualizerWindow(QMainWindow):
         view_menu = menubar.addMenu('View')
 
         # Clear messages action
-        clear_action = QAction('Clear Raw Messages', self)
+        clear_action = QAction('Clear Last Message', self)
         clear_action.triggered.connect(self.raw_message_display.clear_messages)
+        clear_action.setShortcut('Ctrl+L')
         view_menu.addAction(clear_action)
+
+        # Separator
+        view_menu.addSeparator()
+
+        # Auto-scroll toggle (placeholder for future enhancement)
+        autoscroll_action = QAction('Auto-scroll Visualizations', self)
+        autoscroll_action.setCheckable(True)
+        autoscroll_action.setChecked(True)
+        view_menu.addAction(autoscroll_action)
 
     def _connect_signals(self):
         """Connect WebSocket client signals to UI slots."""
@@ -828,8 +1168,8 @@ class StreamVisualizerApp:
 
     def __init__(self, host: str = 'localhost', port: int = 8765):
         self.qt_app = QApplication(sys.argv)
-        self.qt_app.setApplicationName("Friture Streaming Visualizer")
-        self.qt_app.setApplicationVersion("1.0")
+        self.qt_app.setApplicationName("Friture Streaming Visualizer - All Data Types")
+        self.qt_app.setApplicationVersion("1.1")
 
         # Create WebSocket client
         self.websocket_client = StreamingWebSocketClient(host, port)
@@ -851,7 +1191,7 @@ class StreamVisualizerApp:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Friture Streaming Information Visualizer")
+    parser = argparse.ArgumentParser(description="Friture Streaming Information Visualizer - Real-time visualization of all Friture data types")
     parser.add_argument('--host', default='localhost', help='WebSocket server host')
     parser.add_argument('--port', type=int, default=8765, help='WebSocket server port')
 

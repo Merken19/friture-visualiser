@@ -205,12 +205,12 @@ def setup_streaming_integration(dock_manager, levels_widget=None) -> StreamingIn
 
 
 def create_default_streaming_setup(integration: StreamingIntegration, 
-                                 enable_websocket: bool = True,
-                                 enable_tcp: bool = False,
-                                 enable_udp: bool = False,
-                                 enable_http_sse: bool = False) -> None:
+                                   enable_websocket: bool = True,
+                                   enable_tcp: bool = False,
+                                   enable_udp: bool = False,
+                                   enable_http_sse: bool = False) -> None:
     """
-    Create a default streaming setup with common protocols.
+    Create a default streaming setup with common protocols and consumers.
     
     Args:
         integration: StreamingIntegration instance
@@ -219,35 +219,62 @@ def create_default_streaming_setup(integration: StreamingIntegration,
         enable_udp: Enable UDP protocol
         enable_http_sse: Enable HTTP SSE protocol
     """
+    from friture.api.consumers import NetworkConsumer
+
+    logger = logging.getLogger(__name__)
     api = integration.streaming_api
-    
+
     # Clear any existing protocols first
     api.clear_protocols()
-    
-    # Add protocols
-    if enable_websocket:
-        websocket_protocol = WebSocketProtocol()
-        api.add_protocol(websocket_protocol)
-    
-    if enable_tcp:
-        tcp_protocol = TCPProtocol()
-        api.add_protocol(tcp_protocol)
-    
-    if enable_udp:
-        udp_protocol = UDPProtocol()
-        api.add_protocol(udp_protocol)
-    
-    if enable_http_sse:
-        sse_protocol = HTTPSSEProtocol()
-        api.add_protocol(sse_protocol)
-    
-    # Set reasonable rate limits
-    api.set_rate_limit(DataType.PITCH_TRACKER, 20.0)  # 20 Hz
-    api.set_rate_limit(DataType.FFT_SPECTRUM, 15.0)   # 15 Hz
-    api.set_rate_limit(DataType.OCTAVE_SPECTRUM, 10.0) # 10 Hz
-    api.set_rate_limit(DataType.LEVELS, 30.0)         # 30 Hz
-    
-    logging.getLogger(__name__).info("Default streaming setup created")
+    logger.debug("Cleared existing protocols from streaming API.")
+
+    def add_protocol_with_consumer(name: str, protocol_cls, enabled: bool):
+        if not enabled:
+            logger.debug("%s protocol disabled by config.", name.upper())
+            return
+
+        try:
+            protocol = protocol_cls()
+            api.add_protocol(protocol)
+            logger.info("%s protocol added successfully.", name.upper())
+        except Exception as e:
+            logger.warning("Failed to add %s protocol: %s", name.upper(), e)
+            return
+
+        try:
+            consumer = NetworkConsumer(protocol=protocol)
+            # Register the consumer for the main data types
+            for dtype in [
+                DataType.LEVELS,
+                DataType.FFT_SPECTRUM,
+                DataType.OCTAVE_SPECTRUM,
+                DataType.PITCH_TRACKER,
+            ]:
+                api.register_consumer(dtype, consumer)
+                logger.info(
+                    "Registered %s consumer for data type %s", name.upper(), dtype.name
+                )
+            logger.info("Default %s consumer registered successfully.", name.upper())
+        except Exception as e:
+            logger.warning("Failed to register consumer for %s protocol: %s", name.upper(), e)
+
+    # Add protocols + consumers
+    add_protocol_with_consumer("websocket", WebSocketProtocol, enable_websocket)
+    add_protocol_with_consumer("tcp", TCPProtocol, enable_tcp)
+    add_protocol_with_consumer("udp", UDPProtocol, enable_udp)
+    add_protocol_with_consumer("http_sse", HTTPSSEProtocol, enable_http_sse)
+
+    # Set reasonable rate limits / Friture is designed with 25Hz in mind
+    try:
+        api.set_rate_limit(DataType.PITCH_TRACKER, 25.0)   # 25 Hz
+        api.set_rate_limit(DataType.FFT_SPECTRUM, 25.0)    # 25 Hz
+        api.set_rate_limit(DataType.OCTAVE_SPECTRUM, 25.0) # 25 Hz
+        api.set_rate_limit(DataType.LEVELS, 25.0)          # 25 Hz
+        logger.info("Rate limits set to 25 Hz for all major data types.")
+    except Exception as e:
+        logger.warning("Failed to set rate limits: %s", e)
+
+    logger.info("Default streaming setup completed successfully.")
 
 
 def save_streaming_settings(settings: QSettings, integration: StreamingIntegration) -> None:

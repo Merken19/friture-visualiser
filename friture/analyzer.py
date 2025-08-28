@@ -188,7 +188,8 @@ class Friture(QMainWindow, ):
         try:
             self.streaming_integration = setup_streaming_integration(
                 self.dockmanager, 
-                self.level_widget
+                self.level_widget,
+                self.audiobuffer,
             )
             
             # Create default streaming setup (WebSocket enabled by default)

@@ -652,9 +652,6 @@ class DelayEstimatorProducer(DataProducer):
         
         self._is_active = True
         
-        if hasattr(self.widget, 'audiobuffer'):
-            self.widget.audiobuffer.new_data_available.connect(self._on_new_audio_data)
-        
         self.started.emit()
         self.logger.info("DelayEstimatorProducer started")
     
@@ -665,16 +662,10 @@ class DelayEstimatorProducer(DataProducer):
         
         self._is_active = False
         
-        if hasattr(self.widget, 'audiobuffer'):
-            try:
-                self.widget.audiobuffer.new_data_available.disconnect(self._on_new_audio_data)
-            except TypeError:
-                pass
-        
         self.stopped.emit()
         self.logger.info("DelayEstimatorProducer stopped")
     
-    def _on_new_audio_data(self, floatdata) -> None:
+    def _process_data_from_widget(self, floatdata) -> None:
         """Handle new audio data and extract delay estimation information."""
         if not self._is_active:
             return

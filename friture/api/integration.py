@@ -58,11 +58,12 @@ class StreamingIntegration(QObject):
     managing their lifecycle based on dock creation and destruction.
     """
     
-    def __init__(self, dock_manager, parent=None):
+    def __init__(self, dock_manager, audio_buffer, parent=None):
         super().__init__(parent)
         
         self.logger = logging.getLogger(__name__)
         self.dock_manager = dock_manager
+        self.audio_buffer = audio_buffer
         self.streaming_api = get_streaming_api()
         
         # Track active producers
@@ -83,7 +84,29 @@ class StreamingIntegration(QObject):
         # Setup existing docks
         self._setup_existing_docks()
         
+        # Connect to audio buffer AFTER all widget connections are established
+        # This ensures widgets process data before streaming API extracts it
+        self.audio_buffer.new_data_available.connect(self._on_new_audio_data_from_buffer)
+        
         self.logger.info("StreamingIntegration initialized")
+    
+    def _on_new_audio_data_from_buffer(self, floatdata):
+        """
+        Handle new audio data from buffer and trigger producer data extraction.
+        
+        This method is called after widgets have processed the audio data,
+        ensuring that producers extract fresh, processed data.
+        
+        Args:
+            floatdata: Audio data from the buffer
+        """
+        try:
+            # Trigger data extraction for all active producers
+            for producer in self._active_producers.values():
+                if hasattr(producer, '_process_data_from_widget') and producer._is_active:
+                    producer._process_data_from_widget(floatdata)
+        except Exception as e:
+            self.logger.error(f"Error processing audio data for streaming: {e}")
     
     def _connect_dock_signals(self) -> None:
         """Connect to dock manager signals for automatic setup."""
@@ -182,7 +205,7 @@ class StreamingIntegration(QObject):
         }
 
 
-def setup_streaming_integration(dock_manager, levels_widget=None) -> StreamingIntegration:
+def setup_streaming_integration(dock_manager, levels_widget=None, audio_buffer=None) -> StreamingIntegration:
     """
     Setup streaming integration for Friture.
     
@@ -192,11 +215,15 @@ def setup_streaming_integration(dock_manager, levels_widget=None) -> StreamingIn
     Args:
         dock_manager: Friture's dock manager instance
         levels_widget: Levels widget instance (optional)
+        audio_buffer: Audio buffer instance (required for proper data flow)
         
     Returns:
         StreamingIntegration instance
     """
-    integration = StreamingIntegration(dock_manager)
+    if audio_buffer is None:
+        raise ValueError("audio_buffer is required for streaming integration")
+    
+    integration = StreamingIntegration(dock_manager, audio_buffer)
     
     if levels_widget:
         integration.setup_levels_producer(levels_widget)

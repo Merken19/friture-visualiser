@@ -225,6 +225,13 @@ class Friture(QMainWindow, ):
         # restore the settings and widgets geometries
         self.restoreAppState()
 
+        # Refresh streaming producers after docks are fully set up
+        if self.streaming_integration:
+            try:
+                self.streaming_integration.refresh_dock_producers()
+            except Exception as e:
+                self.logger.error(f"Failed to refresh dock producers: {e}")
+
         # make sure the toolbar is shown
         # in case it was closed by mistake (before it was made impossible)
         self.ui.toolBar.setVisible(True)

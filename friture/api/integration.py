@@ -71,11 +71,12 @@ class StreamingIntegration(QObject):
         self._active_producers: Dict[str, Any] = {}
         
         # Widget type to producer class mapping
+        # These IDs must match the widget IDs defined in widgetdict.py
         self._producer_classes = {
             8: PitchTrackerProducer,    # Pitch Tracker
             2: FFTSpectrumProducer,     # FFT Spectrum
             4: OctaveSpectrumProducer,  # Octave Spectrum
-            5: SpectrogramProducer,     # Spectrogram
+            3: SpectrogramProducer,     # 2D Spectrogram (corrected from 5 to 3)
             1: ScopeProducer,           # Scope
             6: DelayEstimatorProducer,  # Delay Estimator
             # Note: Levels widget is handled separately as it's not a dock
@@ -137,7 +138,9 @@ class StreamingIntegration(QObject):
     def _setup_existing_docks(self) -> None:
         """Setup producers for existing docks."""
         try:
+            self.logger.info(f"Setting up producers for {len(self.dock_manager.docks)} existing docks")
             for dock in self.dock_manager.docks:
+                self.logger.info(f"Processing dock: {dock.objectName()}, widgetId: {getattr(dock, 'widgetId', 'None')}")
                 self._setup_dock_producer(dock)
         except Exception as e:
             self.logger.error(f"Error setting up existing docks: {e}")
@@ -145,38 +148,51 @@ class StreamingIntegration(QObject):
     def _setup_dock_producer(self, dock) -> None:
         """
         Setup a producer for a dock.
-        
+
         Args:
             dock: Dock instance to setup producer for
         """
+        dock_name = dock.objectName()
         try:
-            if not hasattr(dock, 'widgetId') or not hasattr(dock, 'audiowidget'):
+            self.logger.info(f"Setting up producer for dock {dock_name}")
+
+            if not hasattr(dock, 'widgetId'):
+                self.logger.warning(f"Dock {dock_name} has no widgetId attribute")
                 return
-            
+
+            if not hasattr(dock, 'audiowidget'):
+                self.logger.warning(f"Dock {dock_name} has no audiowidget attribute")
+                return
+
             widget_id = dock.widgetId
             widget = dock.audiowidget
-            dock_name = dock.objectName()
-            
+
+            self.logger.info(f"Dock {dock_name}: widgetId={widget_id}, widget={type(widget).__name__}")
+
             if widget_id in self._producer_classes:
                 producer_class = self._producer_classes[widget_id]
+                self.logger.info(f"Creating {producer_class.__name__} for dock {dock_name}")
+
                 producer = producer_class(widget, dock_name, self)
-                
+
                 # Register with streaming API
                 data_type = producer.get_data_type()
                 self.streaming_api.register_producer(data_type, producer)
-                
+
                 # Track the producer
                 self._active_producers[dock_name] = producer
-                
-                self.logger.info(f"Setup producer for dock {dock_name} (type: {data_type})")
-            
+
+                self.logger.info(f"Successfully setup producer for dock {dock_name} (type: {data_type})")
+            else:
+                self.logger.warning(f"No producer class found for widgetId {widget_id} in dock {dock_name}")
+
         except Exception as e:
-            self.logger.error(f"Error setting up producer for dock: {e}")
+            self.logger.error(f"Error setting up producer for dock {dock_name}: {e}")
     
     def setup_levels_producer(self, levels_widget) -> None:
         """
         Setup producer for the levels widget.
-        
+
         Args:
             levels_widget: Levels widget instance
         """
@@ -184,11 +200,20 @@ class StreamingIntegration(QObject):
             producer = LevelsProducer(levels_widget, "levels_widget", self)
             self.streaming_api.register_producer(DataType.LEVELS, producer)
             self._active_producers["levels_widget"] = producer
-            
+
             self.logger.info("Setup producer for levels widget")
-            
+
         except Exception as e:
             self.logger.error(f"Error setting up levels producer: {e}")
+
+    def refresh_dock_producers(self) -> None:
+        """
+        Refresh producers for all docks. This can be called after the application
+        is fully initialized to ensure all docks have producers set up.
+        """
+        self.logger.info("Refreshing dock producers...")
+        self._setup_existing_docks()
+        self.logger.info(f"Active producers after refresh: {list(self._active_producers.keys())}")
     
     def get_available_data_types(self) -> List[DataType]:
         """

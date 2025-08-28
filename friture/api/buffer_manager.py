@@ -136,13 +136,13 @@ class BufferManager:
             elif strategy == 'lifo':
                 # For LIFO, we want to keep the most recent data
                 # If buffer is full, remove oldest and add newest
-                if len(buffer) >= buffer.maxlen:
+                if buffer.maxlen is not None and len(buffer) >= buffer.maxlen:
                     buffer.popleft()
                 buffer.append(data)
             elif strategy == 'priority':
                 # Priority-based buffering (simplified implementation)
                 priority = config.get('priority', 1.0)
-                if len(buffer) >= buffer.maxlen and priority < 2.0:
+                if buffer.maxlen is not None and len(buffer) >= buffer.maxlen and priority < 2.0:
                     # Drop if low priority and buffer full
                     self._statistics[f'{data_type.value}_priority_dropped'] += 1
                     return False
@@ -228,8 +228,8 @@ class BufferManager:
             for data_type in DataType:
                 stats[f'{data_type.value}_buffer_size'] = len(self._buffers[data_type])
             
-            stats['memory_usage_mb'] = 0.0 # This check is removed
-            stats['max_memory_mb'] = 0 # This check is removed
+            stats['memory_usage_mb'] = 0  # This check is removed
+            stats['max_memory_mb'] = 0  # This check is removed
             
             return stats
     
@@ -264,11 +264,8 @@ class BufferManager:
             if total_removed > 0:
                 self.logger.info(f"Cleaned up {total_removed} expired items")
                 self._statistics['cleanup_removed'] += total_removed
-            
-            # Force garbage collection if memory usage is high
-            if self._get_memory_usage_mb() > 50:  # 50 MB threshold
-                gc.collect()
-                self._statistics['gc_collections'] += 1
+
+            # Memory management is handled by deque maxlen, no need for explicit GC
             
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
@@ -295,7 +292,7 @@ class BufferManager:
                 new_buffer = deque(maxlen=kwargs['max_size'])
                 
                 # Transfer existing data
-                while old_buffer and len(new_buffer) < new_buffer.maxlen:
+                while old_buffer and new_buffer.maxlen is not None and len(new_buffer) < new_buffer.maxlen:
                     new_buffer.append(old_buffer.popleft())
                 
                 self._buffers[data_type] = new_buffer

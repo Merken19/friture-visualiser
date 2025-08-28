@@ -172,6 +172,21 @@ SoundDevice → RingBuffer → Signal Processing → QML Visualization
 
 This section documents the exact data path and key extension points for debugging and extending the API.
 
+**Recent Critical Fixes (December 2024)**:
+
+1. **BufferManager Memory Check Fix**:
+   - **Problem**: BufferManager was incorrectly checking total application memory usage against buffer-specific thresholds, causing all data to be rejected (`buffer_rejections` counter increasing rapidly).
+   - **Solution**: Removed the faulty memory check. Buffer size is now managed solely by `deque maxlen` parameters, which provides safer and more reliable memory management.
+   - **Impact**: Eliminates false buffer rejections and ensures all valid data is accepted when buffer space is available.
+
+2. **Dynamic Producer Creation**:
+   - **Problem**: Producers were only created for widgets that existed at application startup. New analysis widgets (Spectrogram, Scope, etc.) opened during runtime had no corresponding data producers.
+   - **Solution**: Implemented signal-based producer lifecycle management in `StreamingIntegration`:
+     - Connects to `dock_manager.new_dock_created` signal for automatic producer setup
+     - Connects to `dock_manager.dock_about_to_be_destroyed` signal for proper cleanup
+     - Maintains `_active_producers` dictionary for tracking
+   - **Impact**: All analysis widgets now stream data regardless of when they are opened, providing consistent streaming functionality.
+
 1) Data Extraction from Widgets (Producers)
 - Location: `friture/api/producers.py`
 - Base class: `DataProducer` (QObject + ABC)
@@ -202,6 +217,17 @@ This section documents the exact data path and key extension points for debuggin
 - **Data for only some widgets is streaming**:
   - The `widgetId` in `integration.py`'s `_producer_classes` map might be incorrect for the non-streaming widget.
   - The producer's `extract_data` method for the failing widget is likely returning `None` continuously. Add logging to check the state of the widget attributes it depends on.
+- **Buffer rejections occurring (buffer_rejections > 0 in stats)**:
+  - **Issue**: This was caused by a faulty memory check in BufferManager that incorrectly compared application memory usage against buffer-specific thresholds.
+  - **Fix**: The memory check was removed in `buffer_manager.py` (line 126). Buffer size is now managed solely by the `deque maxlen` parameter, which is safer and more reliable.
+  - **Debugging**: If you see `buffer_rejections` in streaming stats, check that the BufferManager memory check removal is in place. The buffer should accept all data when deque has available space.
+- **Widgets opened after startup not streaming**:
+  - **Issue**: Previously, producers were only created for widgets that existed at application startup. New analysis widgets (Spectrogram, Scope, etc.) opened later had no corresponding producers.
+  - **Fix**: Implemented dynamic producer creation in `integration.py`:
+    - Connects to `dock_manager.new_dock_created` signal to automatically create producers for new docks
+    - Connects to `dock_manager.dock_about_to_be_destroyed` signal to properly cleanup producers
+    - The `_setup_existing_docks()` method handles producers for docks that exist at startup
+  - **Debugging**: If a widget isn't streaming, check that its producer was created by looking for the setup log message: "Setup producer for dock [dock_name] (type: [data_type])". Verify the widget ID mapping in `_producer_classes` dictionary is correct.
 
 ### Performance-Critical Extensions
 

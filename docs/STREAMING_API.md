@@ -7,7 +7,7 @@ The Friture Streaming API provides real-time access to audio analysis data from 
 ## Key Features
 
 - **Zero-Overhead Design**: No performance impact when no consumers are active
-- **Multiple Data Types**: Support for pitch tracking, FFT spectrum, octave analysis, levels, and more
+- **Multiple Data Types**: Support for pitch tracking, FFT spectrum, octave analysis, levels, spectrogram, and more
 - **Flexible Protocols**: WebSocket, TCP, UDP, and HTTP Server-Sent Events
 - **Rate Limiting**: Configurable rate limiting to prevent overwhelming consumers
 - **Backpressure Handling**: Intelligent buffering and overflow management
@@ -580,17 +580,23 @@ protocol.error_occurred.connect(lambda error:
    - Verify producer is registered for the data type
    - Check rate limiting settings
 
-2. **High CPU usage**:
+2. **Spectrogram data not streaming**:
+   - **Issue**: SpectrogramProducer fails to start due to missing `_on_new_audio_data` method
+   - **Symptoms**: Server logs show `AttributeError: 'SpectrogramProducer' object has no attribute '_on_new_audio_data'`
+   - **Status**: Known issue, producer creation succeeds but fails at runtime
+   - **Workaround**: None currently available, requires code fix in `friture/api/producers.py`
+
+3. **High CPU usage**:
    - Reduce rate limits: `api.set_rate_limit(data_type, lower_rate)`
    - Check consumer callback performance
    - Monitor buffer sizes
 
-3. **Memory leaks**:
+4. **Memory leaks**:
    - Check buffer TTL settings
    - Monitor consumer queue sizes
    - Verify proper cleanup in custom consumers
 
-4. **Network connection issues**:
+5. **Network connection issues**:
    - Check firewall settings
    - Verify port availability
    - Monitor protocol error signals

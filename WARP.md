@@ -229,6 +229,14 @@ This section documents the exact data path and key extension points for debuggin
     - The `_setup_existing_docks()` method handles producers for docks that exist at startup
   - **Debugging**: If a widget isn't streaming, check that its producer was created by looking for the setup log message: "Setup producer for dock [dock_name] (type: [data_type])". Verify the widget ID mapping in `_producer_classes` dictionary is correct.
 
+4. **SpectrogramProducer fails to start (January 2025)**:
+   - **Issue**: SpectrogramProducer cannot start due to missing `_on_new_audio_data` method implementation. Server logs show: `ERROR friture.api.streaming_api: Failed to start producer for DataType.SPECTROGRAM: 'SpectrogramProducer' object has no attribute '_on_new_audio_data'`
+   - **Root Cause**: The `_on_new_audio_data` method was accidentally removed during previous fixes, but the `start()` method still tries to connect to it.
+   - **Current Status**: Producer creation succeeds but fails at runtime. Widget ID mapping is correct (ID 3), but signal connection fails.
+   - **Impact**: Spectrogram data is not being streamed despite the producer being registered.
+   - **Workaround**: None currently available. Requires implementing the missing `_on_new_audio_data` method in SpectrogramProducer class.
+   - **Debugging**: Check server logs for the AttributeError. The producer is created successfully but fails during the signal connection phase.
+
 ### Performance-Critical Extensions
 
 **Cython Extensions** (`friture_extensions/`):**

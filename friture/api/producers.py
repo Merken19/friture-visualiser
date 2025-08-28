@@ -46,10 +46,11 @@ import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from .data_types import (DataType, PitchData, FFTSpectrumData, OctaveSpectrumData,
-                        LevelsData, DelayEstimatorData, StreamingMetadata,
-                        create_streaming_data)
+                        LevelsData, DelayEstimatorData, SpectrogramData, ScopeData,
+                        StreamingMetadata, create_streaming_data)
 from ..audiobackend import AudioBackend
 from .consumers import QObjectABCMeta
+
 
 class DataProducer(QObject, ABC, metaclass=QObjectABCMeta):
     """
@@ -130,30 +131,138 @@ class DataProducer(QObject, ABC, metaclass=QObjectABCMeta):
     
     def _emit_data(self, data_payload: Any) -> None:
         """
-        Emit data with proper metadata.
-        
-        Args:
-            data_payload: The extracted data
+        Emit the raw extracted data payload.
+        The StreamingAPI is responsible for wrapping it with metadata.
         """
         try:
-            streaming_data = create_streaming_data(
-                data_type=self.get_data_type(),
-                widget_id=self.widget_id,
-                data_payload=data_payload,
-                stream_time=AudioBackend().get_stream_time(),
-                sample_rate=48000,  # Default, should be overridden
-                channels=1,  # Default, should be overridden
-                sequence_number=self._sequence_number,
-                custom_metadata=self.get_custom_metadata()
-            )
-            
-            self._sequence_number += 1
-            self.data_ready.emit(streaming_data)
-            
+            self.data_ready.emit(data_payload)
         except Exception as e:
             self.logger.error(f"Error emitting data: {e}")
             self.error_occurred.emit(str(e))
 
+class SpectrogramProducer(DataProducer):
+    """
+    Producer for spectrogram data.
+    
+    Extracts time-frequency data from the spectrogram widget.
+    """
+    def __init__(self, spectrogram_widget, widget_id: str, parent=None):
+        super().__init__(spectrogram_widget, widget_id, parent)
+
+    def start(self) -> None:
+        if self._is_active:
+            return
+        self._is_active = True
+        if hasattr(self.widget, 'new_data_available'):
+            self.widget.new_data_available.connect(self._on_new_data)
+        self.started.emit()
+
+    def stop(self) -> None:
+        if not self._is_active:
+            return
+        self._is_active = False
+        if hasattr(self.widget, 'new_data_available'):
+            try:
+                self.widget.new_data_available.disconnect(self._on_new_data)
+            except TypeError:
+                pass
+        self.stopped.emit()
+
+    def _on_new_data(self) -> None:
+        if not self._is_active:
+            return
+        data = self.extract_data()
+        if data:
+            self._emit_data(data)
+
+    def extract_data(self) -> Optional[SpectrogramData]:
+        try:
+            if not hasattr(self.widget, 'spectrogram_data') or self.widget.spectrogram_data is None:
+                return None
+            
+            sdata = self.widget.spectrogram_data
+            timestamps = sdata.timestamps
+            frequencies = sdata.frequencies
+            magnitudes_db = sdata.magnitudes_db
+
+            if timestamps is None or frequencies is None or magnitudes_db is None:
+                return None
+
+            return SpectrogramData(
+                timestamps=timestamps.copy(),
+                frequencies=frequencies.copy(),
+                magnitudes_db=magnitudes_db.copy(),
+                fft_size=self.widget.proc.fft_size,
+                overlap_factor=self.widget.settings.overlap / 100.0,
+                window_type=self.widget.proc.window_type
+            )
+        except Exception as e:
+            self.logger.error(f"Error extracting spectrogram data: {e}")
+            return None
+
+    def get_data_type(self) -> DataType:
+        return DataType.SPECTROGRAM
+
+
+class ScopeProducer(DataProducer):
+    """
+    Producer for scope (time-domain waveform) data.
+    
+    Extracts raw audio waveform segments from the scope widget.
+    """
+    def __init__(self, scope_widget, widget_id: str, parent=None):
+        super().__init__(scope_widget, widget_id, parent)
+
+    def start(self) -> None:
+        if self._is_active:
+            return
+        self._is_active = True
+        if hasattr(self.widget, 'new_data_available'):
+            self.widget.new_data_available.connect(self._on_new_data)
+        self.started.emit()
+
+    def stop(self) -> None:
+        if not self._is_active:
+            return
+        self._is_active = False
+        if hasattr(self.widget, 'new_data_available'):
+            try:
+                self.widget.new_data_available.disconnect(self._on_new_data)
+            except TypeError:
+                pass
+        self.stopped.emit()
+
+    def _on_new_data(self) -> None:
+        if not self._is_active:
+            return
+        data = self.extract_data()
+        if data:
+            self._emit_data(data)
+
+    def extract_data(self) -> Optional[ScopeData]:
+        try:
+            if not hasattr(self.widget, 'scope_data') or self.widget.scope_data is None:
+                return None
+            
+            sdata = self.widget.scope_data
+            timestamps = sdata.timestamps
+            samples = sdata.samples
+
+            if timestamps is None or samples is None:
+                return None
+
+            return ScopeData(
+                timestamps=timestamps.copy(),
+                samples=samples.copy(),
+                trigger_mode=self.widget.settings.get_trigger_mode_as_str(),
+                trigger_level=self.widget.settings.trigger_level
+            )
+        except Exception as e:
+            self.logger.error(f"Error extracting scope data: {e}")
+            return None
+
+    def get_data_type(self) -> DataType:
+        return DataType.SCOPE
 
 class PitchTrackerProducer(DataProducer):
     """
@@ -223,24 +332,14 @@ class PitchTrackerProducer(DataProducer):
             
             tracker = self.widget.tracker
             
-            # Get the latest pitch estimate
             latest_pitch = tracker.get_latest_estimate()
-            
-            # Calculate confidence based on signal strength and harmonic clarity
-            # This is a simplified confidence metric
-            confidence = 0.8 if latest_pitch and not np.isnan(latest_pitch) else 0.0
-            
-            # Convert frequency to note name
-            note_name = None
-            if latest_pitch and not np.isnan(latest_pitch):
-                from ..pitch_tracker_data import frequency_to_note
-                note_name = frequency_to_note(latest_pitch)
-            
-            # Estimate amplitude (simplified)
-            amplitude_db = -20.0  # Default value, could be improved
-            
-            # Harmonic clarity (simplified)
-            harmonic_clarity = confidence  # Simplified correlation
+            if latest_pitch is None or np.isnan(latest_pitch):
+                return None
+
+            confidence = tracker.get_latest_confidence()
+            note_name = tracker.get_latest_note_name()
+            amplitude_db = tracker.get_latest_amplitude_db()
+            harmonic_clarity = tracker.get_latest_harmonic_clarity()
             
             return PitchData(
                 frequency_hz=latest_pitch if latest_pitch and not np.isnan(latest_pitch) else None,
@@ -337,46 +436,37 @@ class FFTSpectrumProducer(DataProducer):
             proc = self.widget.proc
             frequencies = self.widget.freq.copy()
             
-            # Get the latest spectrum data
-            # This would need to be adapted based on how the spectrum widget stores its data
-            if hasattr(self.widget, 'PlotZoneSpect') and hasattr(self.widget.PlotZoneSpect, '_spectrum_data'):
-                spectrum_data = self.widget.PlotZoneSpect._spectrum_data
-                
-                # Extract magnitude data from the plot items
-                if spectrum_data.plot_items and len(spectrum_data._plot_items) > 0:
-                    curve = spectrum_data._plot_items[0]
-                    if hasattr(curve, 'y_array'):
-                        # Convert normalized plot coordinates back to dB values
-                        magnitudes_db = curve.y_array().copy()
-                        
-                        # Get processing parameters
-                        fft_size = getattr(proc, 'fft_size', 1024)
-                        window_type = "hann"  # Default window type
-                        overlap_factor = getattr(self.widget, 'overlap', 0.75)
-                        weighting = self._get_weighting_string()
-                        
-                        # Find peak
-                        if len(magnitudes_db) > 0:
-                            peak_idx = np.argmax(magnitudes_db)
-                            peak_frequency = frequencies[peak_idx] if peak_idx < len(frequencies) else 0.0
-                            peak_magnitude = magnitudes_db[peak_idx]
-                        else:
-                            peak_frequency = 0.0
-                            peak_magnitude = -np.inf
-                        
-                        return FFTSpectrumData(
-                            frequencies=frequencies,
-                            magnitudes_db=magnitudes_db,
-                            phases=None,  # Phase data not typically stored in spectrum widget
-                            fft_size=fft_size,
-                            window_type=window_type,
-                            overlap_factor=overlap_factor,
-                            weighting=weighting,
-                            peak_frequency=peak_frequency,
-                            peak_magnitude=peak_magnitude
-                        )
+            # This is the most reliable way to get the current spectrum data
+            # It's updated by the widget's own processing logic
+            magnitudes_db = self.widget.spectrum_data.magnitudes_db
+            if magnitudes_db is None or len(magnitudes_db) == 0:
+                return None
             
-            return None
+            frequencies = self.widget.spectrum_data.frequencies
+            
+            # Get processing parameters
+            proc = self.widget.proc
+            fft_size = proc.fft_size
+            window_type = proc.window_type
+            overlap_factor = self.widget.settings.overlap / 100.0
+            weighting = self.widget.settings.get_weighting_as_str()
+            
+            # Find peak
+            peak_idx = np.argmax(magnitudes_db)
+            peak_frequency = frequencies[peak_idx]
+            peak_magnitude = magnitudes_db[peak_idx]
+            
+            return FFTSpectrumData(
+                frequencies=frequencies.copy(),
+                magnitudes_db=magnitudes_db.copy(),
+                phases=None,  # Phase data is not exposed for streaming
+                fft_size=fft_size,
+                window_type=window_type,
+                overlap_factor=overlap_factor,
+                weighting=weighting,
+                peak_frequency=peak_frequency,
+                peak_magnitude=peak_magnitude
+            )
             
         except Exception as e:
             self.logger.error(f"Error extracting FFT data: {e}")
@@ -590,23 +680,27 @@ class LevelsProducer(DataProducer):
     def extract_data(self) -> Optional[LevelsData]:
         """Extract levels data from the widget."""
         try:
-            if not hasattr(self.widget, 'level_view_model'):
+            if not hasattr(self.widget, 'level_view_model') or not self.widget.level_view_model.level_data:
                 return None
             
             view_model = self.widget.level_view_model
+            level_data = view_model.level_data
+            ballistic_data = view_model.level_data_ballistic
             
             # Extract level data
-            peak_levels = [view_model.level_data.level_max]
-            rms_levels = [view_model.level_data.level_rms]
-            peak_hold_levels = [view_model.level_data_ballistic.peak_iec * 100 - 100]  # Convert IEC to dB
+            peak_levels = [level_data.level_max]
+            rms_levels = [level_data.level_rms]
+            peak_hold_levels = [ballistic_data.peak_iec * 100 - 100]  # Convert IEC to dB
             
             channel_labels = ["Ch1"]
             
             # Add second channel if available
-            if view_model.two_channels:
-                peak_levels.append(view_model.level_data_2.level_max)
-                rms_levels.append(view_model.level_data_2.level_rms)
-                peak_hold_levels.append(view_model.level_data_ballistic_2.peak_iec * 100 - 100)
+            if view_model.two_channels and view_model.level_data_2 and view_model.level_data_ballistic_2:
+                level_data_2 = view_model.level_data_2
+                ballistic_data_2 = view_model.level_data_ballistic_2
+                peak_levels.append(level_data_2.level_max)
+                rms_levels.append(level_data_2.level_rms)
+                peak_hold_levels.append(ballistic_data_2.peak_iec * 100 - 100)
                 channel_labels.append("Ch2")
             
             return LevelsData(
@@ -649,9 +743,10 @@ class DelayEstimatorProducer(DataProducer):
         """Start producing delay estimation data."""
         if self._is_active:
             return
-        
         self._is_active = True
-        
+        if hasattr(self.widget, 'new_result_available'):
+            self.widget.new_result_available.connect(self._on_new_result)
+        self.started.emit()
         self.started.emit()
         self.logger.info("DelayEstimatorProducer started")
     
@@ -659,24 +754,23 @@ class DelayEstimatorProducer(DataProducer):
         """Stop producing delay estimation data."""
         if not self._is_active:
             return
-        
         self._is_active = False
-        
+        if hasattr(self.widget, 'new_result_available'):
+            try:
+                self.widget.new_result_available.disconnect(self._on_new_result)
+            except TypeError:
+                pass
+        self.stopped.emit()
         self.stopped.emit()
         self.logger.info("DelayEstimatorProducer stopped")
     
-    def _process_data_from_widget(self, floatdata) -> None:
-        """Handle new audio data and extract delay estimation information."""
+    def _on_new_result(self) -> None:
+        """Handle new delay estimation result from the widget."""
         if not self._is_active:
             return
-        
-        try:
-            data = self.extract_data()
-            if data is not None:
-                self._emit_data(data)
-        except Exception as e:
-            self.logger.error(f"Error processing delay estimation data: {e}")
-            self.error_occurred.emit(str(e))
+        data = self.extract_data()
+        if data is not None:
+            self._emit_data(data)
     
     def extract_data(self) -> Optional[DelayEstimatorData]:
         """Extract delay estimation data from the widget."""

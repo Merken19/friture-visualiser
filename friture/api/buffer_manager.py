@@ -42,7 +42,6 @@ import threading
 import time
 from collections import defaultdict, deque
 from typing import Dict, Any, Optional, List
-import psutil
 import gc
 
 from .data_types import DataType, StreamingData
@@ -63,11 +62,10 @@ class BufferManager:
     - 'adaptive': Dynamically adjust based on conditions
     """
     
-    def __init__(self, max_memory_mb: int = 100):
+    def __init__(self):
         self.logger = logging.getLogger(__name__)
         
         # Configuration
-        self._max_memory_bytes = max_memory_mb * 1024 * 1024
         
         # Buffers for each data type
         self._buffers: Dict[DataType, deque] = defaultdict(lambda: deque(maxlen=1000))
@@ -125,11 +123,7 @@ class BufferManager:
             True if data was added, False if rejected due to backpressure
         """
         with self._lock:
-            # Check memory usage
-            if self._should_reject_due_to_memory():
-                self._statistics['memory_rejections'] += 1
-                return False
-            
+            # Memory usage is managed by deque maxlen, no need for explicit check
             # Get buffer and configuration
             buffer = self._buffers[data_type]
             config = self._buffer_configs[data_type]
@@ -234,24 +228,11 @@ class BufferManager:
             for data_type in DataType:
                 stats[f'{data_type.value}_buffer_size'] = len(self._buffers[data_type])
             
-            # Add memory usage
-            stats['memory_usage_mb'] = self._get_memory_usage_mb()
-            stats['max_memory_mb'] = self._max_memory_bytes / (1024 * 1024)
+            stats['memory_usage_mb'] = 0.0 # This check is removed
+            stats['max_memory_mb'] = 0 # This check is removed
             
             return stats
     
-    def _should_reject_due_to_memory(self) -> bool:
-        """Check if data should be rejected due to memory pressure."""
-        current_memory = self._get_memory_usage_mb() * 1024 * 1024
-        return current_memory > self._max_memory_bytes * 0.9  # 90% threshold
-    
-    def _get_memory_usage_mb(self) -> float:
-        """Get current memory usage in MB."""
-        try:
-            process = psutil.Process()
-            return process.memory_info().rss / (1024 * 1024)
-        except:
-            return 0.0
     
     def _maybe_cleanup(self) -> None:
         """Perform periodic cleanup if needed."""

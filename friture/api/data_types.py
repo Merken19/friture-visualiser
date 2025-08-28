@@ -186,6 +186,50 @@ class LevelsData:
 
 
 @dataclass(frozen=True)
+class SpectrogramData:
+    """
+    Time-frequency analysis results for spectrograms.
+    
+    Contains a 2D array representing the spectrum over time, which is
+    ideal for waterfall displays and detailed time-frequency analysis.
+    
+    Attributes:
+        timestamps: Array of timestamps for each time slice (seconds)
+        frequencies: Array of frequency bins (Hz)
+        magnitudes_db: 2D array of magnitudes (time x frequency)
+        fft_size: FFT size used for analysis
+        overlap_factor: Overlap factor used [0.0, 1.0)
+        window_type: Window function applied
+    """
+    timestamps: np.ndarray
+    frequencies: np.ndarray
+    magnitudes_db: np.ndarray
+    fft_size: int
+    overlap_factor: float
+    window_type: str
+
+
+@dataclass(frozen=True)
+class ScopeData:
+    """
+    Time-domain waveform data.
+    
+    Contains a segment of the raw audio waveform, suitable for oscilloscope-style
+    displays and time-domain analysis.
+    
+    Attributes:
+        timestamps: Array of timestamps for each sample (seconds)
+        samples: Array of audio samples (channel x time)
+        trigger_mode: Triggering mode used ('auto', 'normal', 'free')
+        trigger_level: Triggering level
+    """
+    timestamps: np.ndarray
+    samples: np.ndarray
+    trigger_mode: str
+    trigger_level: float
+
+
+@dataclass(frozen=True)
 class DelayEstimatorData:
     """
     Delay estimation results between two audio channels.
@@ -198,7 +242,7 @@ class DelayEstimatorData:
         delay_samples: Estimated delay in samples
         confidence: Confidence of the delay estimate [0.0, 1.0]
         correlation_peak: Maximum correlation value
-        polarity: Signal polarity relationship ("in_phase", "reversed", "unknown")
+        polarity: Signal polarity relationship (\"in_phase\", \"reversed\", \"unknown\")
         distance_m: Equivalent distance in meters (assuming sound speed 340 m/s)
     """
     delay_ms: float
@@ -207,52 +251,6 @@ class DelayEstimatorData:
     correlation_peak: float
     polarity: str
     distance_m: float
-
-
-@dataclass(frozen=True)
-class SpectrogramData:
-    """
-    Spectrogram (time-frequency) analysis results.
-    
-    Contains 2D time-frequency representation with associated axes information.
-    
-    Attributes:
-        time_axis: Time axis values in seconds
-        frequency_axis: Frequency axis values in Hz
-        magnitude_matrix: 2D magnitude matrix in dB (time x frequency)
-        time_resolution: Time resolution in seconds
-        frequency_resolution: Frequency resolution in Hz
-        color_range_db: Dynamic range for color mapping [min_db, max_db]
-        frequency_scale: Frequency scale type ("linear", "log", "mel", "erb")
-    """
-    time_axis: np.ndarray
-    frequency_axis: np.ndarray
-    magnitude_matrix: np.ndarray
-    time_resolution: float
-    frequency_resolution: float
-    color_range_db: tuple
-    frequency_scale: str
-
-
-@dataclass(frozen=True)
-class ScopeData:
-    """
-    Oscilloscope (time domain) analysis results.
-    
-    Contains time-domain waveform data with trigger information.
-    
-    Attributes:
-        time_axis: Time axis values in seconds
-        waveforms: Waveform data per channel
-        trigger_level: Trigger level used for display
-        trigger_channel: Channel used for triggering
-        time_range: Total time range displayed in seconds
-    """
-    time_axis: np.ndarray
-    waveforms: np.ndarray
-    trigger_level: float
-    trigger_channel: int
-    time_range: float
 
 
 @dataclass(frozen=True)
@@ -346,21 +344,19 @@ class StreamingData:
             }
         elif isinstance(self.data, SpectrogramData):
             return {
-                'time_axis': self.data.time_axis.tolist(),
-                'frequency_axis': self.data.frequency_axis.tolist(),
-                'magnitude_matrix': self.data.magnitude_matrix.tolist(),
-                'time_resolution': self.data.time_resolution,
-                'frequency_resolution': self.data.frequency_resolution,
-                'color_range_db': self.data.color_range_db,
-                'frequency_scale': self.data.frequency_scale
+                'timestamps': self.data.timestamps.tolist(),
+                'frequencies': self.data.frequencies.tolist(),
+                'magnitudes_db': self.data.magnitudes_db.tolist(),
+                'fft_size': self.data.fft_size,
+                'overlap_factor': self.data.overlap_factor,
+                'window_type': self.data.window_type
             }
         elif isinstance(self.data, ScopeData):
             return {
-                'time_axis': self.data.time_axis.tolist(),
-                'waveforms': self.data.waveforms.tolist(),
-                'trigger_level': self.data.trigger_level,
-                'trigger_channel': self.data.trigger_channel,
-                'time_range': self.data.time_range
+                'timestamps': self.data.timestamps.tolist(),
+                'samples': self.data.samples.tolist(),
+                'trigger_mode': self.data.trigger_mode,
+                'trigger_level': self.data.trigger_level
             }
         else:
             return {}

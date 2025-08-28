@@ -43,7 +43,8 @@ from PyQt5.QtCore import QObject, QSettings
 from .streaming_api import get_streaming_api
 from .data_types import DataType
 from .producers import (PitchTrackerProducer, FFTSpectrumProducer, 
-                       OctaveSpectrumProducer, LevelsProducer, DelayEstimatorProducer)
+                       OctaveSpectrumProducer, LevelsProducer, DelayEstimatorProducer,
+                       SpectrogramProducer, ScopeProducer)
 from .consumers import CallbackConsumer, QueueConsumer, NetworkConsumer
 from .protocols import WebSocketProtocol, TCPProtocol, UDPProtocol, HTTPSSEProtocol
 from ..widgetdict import widgetIds
@@ -74,12 +75,17 @@ class StreamingIntegration(QObject):
             8: PitchTrackerProducer,    # Pitch Tracker
             2: FFTSpectrumProducer,     # FFT Spectrum
             4: OctaveSpectrumProducer,  # Octave Spectrum
+            5: SpectrogramProducer,     # Spectrogram
+            1: ScopeProducer,           # Scope
             6: DelayEstimatorProducer,  # Delay Estimator
             # Note: Levels widget is handled separately as it's not a dock
         }
         
         # Connect to dock manager signals
-        self._connect_dock_signals()
+        if hasattr(self.dock_manager, 'new_dock_created'):  # Ideal signal
+            self.dock_manager.new_dock_created.connect(self._setup_dock_producer)
+        if hasattr(self.dock_manager, 'dock_about_to_be_destroyed'): # Ideal signal
+            self.dock_manager.dock_about_to_be_destroyed.connect(self._teardown_dock_producer)
         
         # Setup existing docks
         self._setup_existing_docks()
@@ -89,6 +95,20 @@ class StreamingIntegration(QObject):
         self.audio_buffer.new_data_available.connect(self._on_new_audio_data_from_buffer)
         
         self.logger.info("StreamingIntegration initialized")
+
+    def _teardown_dock_producer(self, dock) -> None:
+        """
+        Teardown the producer for a dock that is being destroyed.
+        """
+        try:
+            dock_name = dock.objectName()
+            if dock_name in self._active_producers:
+                producer = self._active_producers.pop(dock_name)
+                producer.stop()
+                # Unregister from API if necessary, though stopping should be enough
+                self.logger.info(f"Tore down producer for dock {dock_name}")
+        except Exception as e:
+            self.logger.error(f"Error tearing down producer for dock: {e}")
     
     def _on_new_audio_data_from_buffer(self, floatdata):
         """
@@ -276,6 +296,8 @@ def create_default_streaming_setup(integration: StreamingIntegration,
                 DataType.FFT_SPECTRUM,
                 DataType.OCTAVE_SPECTRUM,
                 DataType.PITCH_TRACKER,
+                DataType.SPECTROGRAM,
+                DataType.SCOPE,
             ]:
                 api.register_consumer(dtype, consumer)
                 logger.info(

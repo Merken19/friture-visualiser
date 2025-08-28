@@ -97,7 +97,8 @@ class StreamingAPI(QObject):
         # Performance monitoring
         self._performance_timer = QTimer()
         self._performance_timer.timeout.connect(self._update_performance_stats)
-        self._performance_timer.setInterval(1000)  # Update every second
+        self._performance_timer.timeout.connect(self._process_buffers)
+        self._performance_timer.setInterval(40)  # Process buffers at ~25 Hz
         
         self.logger.info("StreamingAPI initialized")
     
@@ -343,8 +344,9 @@ class StreamingAPI(QObject):
                 data=data_payload
             )
             
-            # Distribute to consumers
-            self._distribute_to_consumers(data_type, streaming_data)
+            # Add data to buffer manager for asynchronous processing
+            if not self._buffer_manager.add_data(data_type, streaming_data):
+                self._statistics['buffer_rejections'] = self._statistics.get('buffer_rejections', 0) + 1
             
             # Update statistics
             self._statistics['total_data_points'] += 1
@@ -381,6 +383,31 @@ class StreamingAPI(QObject):
                 self.logger.error(f"Error in consumer {consumer.get_id()}: {e}")
                 self.error_occurred.emit("consumer", str(e))
     
+    def _process_buffers(self) -> None:
+        """Periodically process buffered data and distribute to consumers."""
+        try:
+            with self._lock:
+                if not self._is_streaming:
+                    return
+                for data_type, consumers in self._consumers.items():
+                    if not consumers:
+                        continue
+
+                    # Get all available data up to a max limit to avoid blocking
+                    # The number of items to process per cycle can be tuned
+                    # Let's process one item per consumer per cycle to start
+                    num_consumers = len(consumers)
+                    items = self._buffer_manager.get_data(data_type, max_items=num_consumers * 2)
+                    
+                    if not items:
+                        continue
+                    
+                    for item in items:
+                        # This will still send to all consumers for that type
+                        self._distribute_to_consumers(data_type, item)
+        except Exception as e:
+            self.logger.error(f"Error processing buffers: {e}")
+
     def _update_performance_stats(self) -> None:
         """Update performance statistics (called periodically)."""
         try:

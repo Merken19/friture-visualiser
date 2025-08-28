@@ -196,7 +196,7 @@ class Friture(QMainWindow, ):
             create_default_streaming_setup(
                 self.streaming_integration,
                 enable_websocket=True,
-                enable_tcp=True,
+                enable_tcp=False,
                 enable_udp=False,
                 enable_http_sse=False
             )

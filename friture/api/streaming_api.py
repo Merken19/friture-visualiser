@@ -198,6 +198,17 @@ class StreamingAPI(QObject):
             
             self.logger.info(f"Added protocol: {type(protocol).__name__}")
     
+    def clear_protocols(self) -> None:
+        """Clears all registered protocols and stops them if running."""
+        with self._lock:
+            for protocol in self._protocols:
+                try:
+                    protocol.stop()
+                except Exception as e:
+                    self.logger.error(f"Error stopping protocol during clear: {e}")
+            self._protocols.clear()
+            self.logger.info("All protocols cleared.")
+            
     def start_streaming(self) -> None:
         """
         Start the streaming API.
@@ -216,14 +227,17 @@ class StreamingAPI(QObject):
             for protocol in self._protocols:
                 try:
                     protocol.start()
+                    print(f"Started protocol {type(protocol).__name__} on {protocol.host}:{protocol.port}")
                 except Exception as e:
                     self.logger.error(f"Failed to start protocol {type(protocol).__name__}: {e}")
             
             # Start producers that have consumers
             for data_type, producer in self._producers.items():
+                print(f"Checking producer for {data_type}, consumers: {len(self._consumers[data_type])}")
                 if self._consumers[data_type]:
                     try:
                         producer.start()
+                        print(f"Started producer for {data_type}")
                     except Exception as e:
                         self.logger.error(f"Failed to start producer for {data_type}: {e}")
             

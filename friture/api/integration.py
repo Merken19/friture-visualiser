@@ -322,9 +322,11 @@ def load_streaming_settings(settings: QSettings, integration: StreamingIntegrati
             if protocol_type == "WebSocketProtocol":
                 protocol = WebSocketProtocol(host, port)
                 api.add_protocol(protocol)
+                print("Tried to add websocket protocol in integration.py load_streaming_settings")
             elif protocol_type == "TCPProtocol":
                 protocol = TCPProtocol(host, port)
                 api.add_protocol(protocol)
+                print("Tried to add TCP protocol in integration.py load_streaming_settings")
             # Add other protocol types as needed
             
             settings.endGroup()

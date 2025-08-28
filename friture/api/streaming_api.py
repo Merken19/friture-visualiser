@@ -324,6 +324,11 @@ class StreamingAPI(QObject):
                 self._statistics['rate_limited_count'] += 1
                 return
             
+            # Skip if data payload is None or empty
+            if data_payload is None:
+                self._statistics['empty_data_count'] += 1
+                return
+            
             # Create streaming data structure
             with self._lock:
                 sequence_number = self._sequence_numbers[data_type]

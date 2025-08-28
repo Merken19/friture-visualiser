@@ -103,7 +103,7 @@ class StreamingIntegration(QObject):
         try:
             # Trigger data extraction for all active producers
             for producer in self._active_producers.values():
-                if hasattr(producer, '_process_data_from_widget'):
+                if hasattr(producer, '_process_data_from_widget') and producer._is_active:
                     producer._process_data_from_widget(floatdata)
         except Exception as e:
             self.logger.error(f"Error processing audio data for streaming: {e}")

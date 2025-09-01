@@ -195,7 +195,7 @@ This section documents the exact data path and key extension points for debuggin
   - Emission: `_emit_data()` packages the extracted data and emits `data_ready`.
 - Key concrete producers and where they read from:
   - `PitchTrackerProducer`: Reads from `widget.tracker`'s latest estimates (`get_latest_estimate`, `get_latest_confidence`, etc.).
-  - `FFTSpectrumProducer`: Reads from `widget.spectrum_data.magnitudes_db` and `.frequencies`.
+  - `FFTSpectrumProducer`: Reads from `widget.dispbuffers1` (linear spectrum), converts to dB with weighting applied, and provides `magnitudes_db` and `frequencies`.
   - `OctaveSpectrumProducer`: Reads from `widget.dispbuffers` and applies weighting from `widget.filters`.
   - `LevelsProducer`: Reads from `widget.level_view_model` and its associated `level_data` and `level_data_ballistic` objects.
   - `SpectrogramProducer`: Reads from `widget.spectrogram_data` (timestamps, frequencies, magnitudes).

@@ -109,13 +109,13 @@ class PitchData:
 class FFTSpectrumData:
     """
     FFT spectrum analysis results.
-    
+
     Contains frequency domain representation of the audio signal with
     associated frequency bins and processing parameters.
-    
+
     Attributes:
         frequencies: Frequency bin centers in Hz
-        magnitudes_linear: Magnitude spectrum in linear scale
+        magnitudes_db: Magnitude spectrum in dB scale (10 * log10 of power spectrum)
         phases: Phase spectrum in radians (optional)
         fft_size: FFT size used for analysis
         window_type: Window function applied ("hann", "hamming", etc.)
@@ -125,7 +125,7 @@ class FFTSpectrumData:
         peak_magnitude: Maximum magnitude in dB
     """
     frequencies: np.ndarray
-    magnitudes_linear: np.ndarray
+    magnitudes_db: np.ndarray
     phases: Optional[np.ndarray]
     fft_size: int
     window_type: str
@@ -305,7 +305,7 @@ class StreamingData:
         elif isinstance(self.data, FFTSpectrumData):
             return {
                 'frequencies': self.data.frequencies.tolist(),
-                'magnitudes_linear': self.data.magnitudes_linear.tolist(),
+                'magnitudes_db': self.data.magnitudes_db.tolist(),
                 'phases': self.data.phases.tolist() if self.data.phases is not None else None,
                 'fft_size': self.data.fft_size,
                 'window_type': self.data.window_type,

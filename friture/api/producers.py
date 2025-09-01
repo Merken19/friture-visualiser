@@ -548,14 +548,16 @@ class FFTSpectrumProducer(DataProducer):
             frequencies = self.widget.freq.copy()
 
             # Get the current spectrum data from the widget's display buffers
-            # This contains linear magnitude values (normalized to the display range)
-            magnitudes_linear = np.asarray(self.widget.dispbuffers1, dtype=np.float64).copy()
+            # This contains linear magnitude values
+            linear_spectrum = np.asarray(self.widget.dispbuffers1, dtype=np.float64).copy()
 
-            # Apply weighting if present (in linear domain)
+            # Convert to dB scale (matching original spectrum.py implementation)
+            epsilon = 1e-30
+            magnitudes_db = 10. * np.log10(linear_spectrum + epsilon)
+
+            # Apply weighting if present (in dB domain, matching original)
             if hasattr(self.widget, 'w') and self.widget.w is not None:
-                # Convert weighting from dB to linear and apply
-                weighting_linear = 10 ** (self.widget.w.flatten() / 20.0)
-                magnitudes_linear = magnitudes_linear * weighting_linear
+                magnitudes_db = magnitudes_db + self.widget.w.flatten()
 
             # Get processing parameters
             fft_size = proc.fft_size
@@ -564,17 +566,17 @@ class FFTSpectrumProducer(DataProducer):
             weighting = self._get_weighting_string()
 
             # Find peak
-            if len(magnitudes_linear) > 0:
-                peak_idx = np.argmax(magnitudes_linear)
+            if len(magnitudes_db) > 0:
+                peak_idx = np.argmax(magnitudes_db)
                 peak_frequency = frequencies[peak_idx] if peak_idx < len(frequencies) else 0
-                peak_magnitude = magnitudes_linear[peak_idx]
+                peak_magnitude = magnitudes_db[peak_idx]
             else:
                 peak_frequency = 0
                 peak_magnitude = 0
 
             return FFTSpectrumData(
                 frequencies=frequencies.copy(),
-                magnitudes_linear=magnitudes_linear.copy(),
+                magnitudes_db=magnitudes_db.copy(),
                 phases=None,  # Phase data is not exposed for streaming
                 fft_size=fft_size,
                 window_type=window_type,

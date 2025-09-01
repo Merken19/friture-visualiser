@@ -108,30 +108,29 @@ def pitch_handler(data):
 @dataclass
 class FFTSpectrumData:
     frequencies: np.ndarray           # Frequency bins in Hz
-    magnitudes_linear: np.ndarray    # Magnitude spectrum in linear scale
+    magnitudes_db: np.ndarray        # Magnitude spectrum in dB scale (10 * log10 of power spectrum)
     phases: Optional[np.ndarray]     # Phase spectrum in radians
     fft_size: int                    # FFT size used
     window_type: str                 # Window function ("hann", etc.)
     overlap_factor: float            # Overlap factor [0.0, 1.0)
     weighting: str                   # Frequency weighting ("A", "B", "C", "none")
     peak_frequency: float            # Frequency of peak magnitude
-    peak_magnitude: float            # Peak magnitude in linear scale
+    peak_magnitude: float            # Peak magnitude in dB
 ```
 
 **Important Notes:**
-- `magnitudes_linear` contains **power spectrum values in linear scale**, not dB
-- To convert to dB: `magnitudes_db = 20 * np.log10(magnitudes_linear + epsilon)`
-- Values typically range from 0 to ~1.0 for normalized audio signals
-- The data is exponentially smoothed and includes frequency weighting
+- `magnitudes_db` contains **power spectrum values in dB scale** (10 * log10)
+- Values are exponentially smoothed and include frequency weighting
+- The data matches the original Friture spectrum widget's internal representation
+- Peak magnitude is also in dB scale
 
 **Example Usage:**
 ```python
 def spectrum_handler(data):
     spectrum = data.data
 
-    # Convert linear magnitudes to dB for analysis
-    epsilon = 1e-30
-    magnitudes_db = 20 * np.log10(spectrum.magnitudes_linear + epsilon)
+    # Magnitudes are already in dB scale
+    magnitudes_db = spectrum.magnitudes_db
 
     # Find frequencies above threshold
     threshold_db = -40
@@ -466,11 +465,11 @@ class AudioDashboard:
         # Downsample for web transmission
         spectrum = data.data
         step = max(1, len(spectrum.frequencies) // 200)  # Max 200 points
-        
+
         message = {
             'type': 'spectrum_update',
             'frequencies': spectrum.frequencies[::step].tolist(),
-            'magnitudes': spectrum.magnitudes_linear[::step].tolist(),
+            'magnitudes': spectrum.magnitudes_db[::step].tolist(),
             'peak_freq': spectrum.peak_frequency
         }
         self.websocket.send_data(json.dumps(message))

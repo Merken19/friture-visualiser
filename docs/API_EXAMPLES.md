@@ -52,13 +52,13 @@ from friture.api import get_streaming_api, DataType, CallbackConsumer
 
 def analyze_spectrum():
     api = get_streaming_api()
-    
+
     def spectrum_callback(data):
         spectrum = data.data
 
-        # Find dominant frequencies (convert linear to dB for analysis)
+        # Get dB magnitudes directly (already in dB scale)
         threshold_db = -30
-        magnitudes_db = 20 * np.log10(spectrum.magnitudes_linear + 1e-30)
+        magnitudes_db = spectrum.magnitudes_db
         dominant_mask = magnitudes_db > threshold_db
         dominant_freqs = spectrum.frequencies[dominant_mask]
         dominant_mags_db = magnitudes_db[dominant_mask]
@@ -68,11 +68,11 @@ def analyze_spectrum():
             for freq, mag_db in zip(dominant_freqs[:5], dominant_mags_db[:5]):
                 print(f"  {freq:.1f} Hz: {mag_db:.1f} dB")
             print()
-    
+
     consumer = CallbackConsumer(spectrum_callback)
     api.register_consumer(DataType.FFT_SPECTRUM, consumer)
     api.start_streaming()
-    
+
     try:
         while True:
             time.sleep(2)
@@ -134,8 +134,8 @@ class WebDashboard:
 
         # Downsample for web (every 4th point)
         step = 4
-        # Convert linear magnitudes to dB for web display
-        magnitudes_db = 20 * np.log10(spectrum.magnitudes_linear + 1e-30)
+        # Magnitudes are already in dB scale
+        magnitudes_db = spectrum.magnitudes_db
         message = {
             'type': 'spectrum',
             'data': {
@@ -420,23 +420,24 @@ class SpectralFeatureExtractor:
         # Calculate spectral features
         features = self.calculate_spectral_features(
             spectrum.frequencies,
-            spectrum.magnitudes_linear
+            spectrum.magnitudes_db
         )
 
         print(f"Spectral Features:")
         for name, value in features.items():
             print(f"  {name}: {value:.2f}")
         print()
-    
-    def calculate_spectral_features(self, frequencies, magnitudes_linear):
+
+    def calculate_spectral_features(self, frequencies, magnitudes_db):
         """Calculate various spectral features."""
-        # Input is already in linear scale
-        
+        # Input is in dB scale, convert to linear for energy calculations
+        magnitudes_linear = 10 ** (magnitudes_db / 10.0)
+
         # Normalize
         total_energy = np.sum(magnitudes_linear)
         if total_energy == 0:
             return {}
-        
+
         normalized_spectrum = magnitudes_linear / total_energy
         
         features = {}

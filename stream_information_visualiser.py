@@ -12,17 +12,12 @@ Usage:
     python stream_information_visualiser.py --host localhost --port 8765
 
 Features:
-- Real-time visualizations for all Friture data types (levels, spectrum, pitch, octave, scope, delay)
+- Real-time visualizations for Friture data types (levels, octave spectrum, pitch, scope, delay)
 - Memory-efficient raw message display (shows only the latest message)
 - Copy-to-clipboard functionality for raw messages
 - Comprehensive statistics and connection monitoring
 - Crash-resistant design with proper error handling
-- Octave-scaled frequency spectrum display with lower frequency visibility
-
-Configuration Notes:
-- For 25ms response time: Set response_time=0.025 in the source spectrum widget
-- Spectrum uses octave scaling (log2) for better musical frequency representation
-- Lower frequencies (down to 20Hz) are now visible in the display
+- Octave-scaled frequency spectrum display
 """
 
 import sys
@@ -37,7 +32,7 @@ import argparse
 
 import numpy as np
 from PyQt5.QtCore import (
-    Qt, QTimer, QObject, pyqtSignal, QThread, QRectF, QPointF
+    Qt, QTimer, QObject, pyqtSignal, QThread
 )
 from PyQt5.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QFontMetrics, QPainterPath
@@ -397,145 +392,6 @@ class LevelsVisualization(BaseVisualizationWidget):
             painter.drawText(x, y_offset + height + 15, f"Ch{i+1}")
 
 
-class SpectrumVisualization(BaseVisualizationWidget):
-    """Visualization for FFT spectrum data with octave scaling."""
-
-    def __init__(self, parent=None):
-        super().__init__("fft_spectrum", "Frequency Spectrum (Octave Scale)", parent)
-        self.frequencies = np.array([])
-        self.magnitudes = np.array([])
-
-    def update_display(self):
-        """Update the spectrum display."""
-        if not self.latest_data or 'data' not in self.latest_data:
-            return
-
-        data = self.latest_data['data']
-
-        # Extract spectrum data
-        # magnitudes_linear contains power spectrum values in linear scale (not dB)
-        # These are exponentially smoothed and include frequency weighting
-        # NOTE: For 25ms response time, ensure the source spectrum widget has
-        # response_time set to 0.025 seconds
-        self.frequencies = np.array(data.get('frequencies', []))
-        self.magnitudes = np.array(data.get('magnitudes_linear', []))
-
-        # Update status to show octave scaling
-        self.status_label.setText("Receiving data (Octave Scale)")
-
-        # Trigger repaint
-        self.update()
-
-    def paintEvent(self, a0):
-        """Paint the spectrum visualization."""
-        super().paintEvent(a0)
-
-        if not self.latest_data or len(self.frequencies) == 0 or len(self.magnitudes) == 0:
-            return
-
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        # Get widget dimensions
-        width = self.width() - 20
-        height = self.height() - 80
-        x_offset = 10
-        y_offset = 60
-
-
-        # Convert linear magnitude to dB for visualization
-        # First, let's see what the raw linear values look like
-        print(f"Raw linear values: min={np.min(self.magnitudes):.2e}, max={np.max(self.magnitudes):.2e}")
-
-        # The linear values are power spectrum (already squared), so use 10*log10 for dB conversion
-        # Add a reference level to get meaningful dB values
-        epsilon = 1e-30
-        reference_level = 1e-6  # More reasonable reference for audio power spectrum
-        magnitudes_db = 10 * np.log10(np.maximum(self.magnitudes, epsilon) / reference_level)
-
-        # Debug: Check the conversion
-        print(f"dB conversion: {np.min(magnitudes_db):.1f} to {np.max(magnitudes_db):.1f} dB")
-
-        # Calculate scaling for dB display
-        # Use dynamic range based on actual data for better visualization
-        if len(magnitudes_db) > 0:
-            # Use 90th percentile as max, 10th percentile as min
-            mag_max = float(np.percentile(magnitudes_db, 90))
-            mag_min = float(np.percentile(magnitudes_db, 10))
-            # Ensure reasonable range
-            mag_min = max(mag_min, mag_max - 80)  # At least 80dB range
-            mag_max = min(mag_max, 0)  # Don't go above 0 dB
-            mag_min = max(mag_min, -120)  # Don't go below -120 dB
-        else:
-            mag_min = -100
-            mag_max = -20
-
-        print(f"Display range: {mag_min:.1f} to {mag_max:.1f} dB")
-
-        # Ensure min/max frequencies are valid
-        valid_freqs = self.frequencies[self.frequencies > 0]
-        if len(valid_freqs) == 0:
-            return  # Can't draw if no valid frequencies
-
-        # Use octave scaling (log2) instead of log10 for better musical frequency representation
-        freq_min = np.log2(max(20, np.min(valid_freqs)))
-        freq_max = np.log2(max(20000, np.max(valid_freqs)))
-
-        # Extend the range to show lower octaves (down to 20Hz and below if needed)
-        freq_min = min(freq_min, np.log2(20))  # Ensure we show down to 20Hz
-        freq_max = max(freq_max, np.log2(20000))  # Ensure we show up to 20kHz
-
-        if freq_min >= freq_max:
-            return # Avoid division by zero
-
-        # Draw spectrum
-        painter.setPen(QPen(QColor(0, 100, 200), 2))
-
-        path = QPainterPath()
-        path.moveTo(x_offset, y_offset + height)
-
-        for i, (freq, mag) in enumerate(zip(self.frequencies, magnitudes_db)):
-            if freq <= 0:
-                continue
-
-            # Octave frequency scaling (log2)
-            x = x_offset + ((np.log2(freq) - freq_min) / (freq_max - freq_min)) * width
-
-            # Magnitude scaling (invert Y axis)
-            y = y_offset + (1 - (max(mag_min, min(mag_max, mag)) - mag_min) / (mag_max - mag_min)) * height
-
-            if i == 0:
-                path.moveTo(x, y)
-            else:
-                path.lineTo(x, y)
-
-        painter.drawPath(path)
-
-        # Draw octave boundary lines
-        painter.setPen(QPen(QColor(200, 200, 200), 1, Qt.DotLine))
-        octave_freqs = [31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-        for octave_freq in octave_freqs:
-            if octave_freq >= 20 and octave_freq <= 20000:
-                x_pos = x_offset + ((np.log2(octave_freq) - freq_min) / (freq_max - freq_min)) * width
-                painter.drawLine(int(x_pos), y_offset, int(x_pos), y_offset + height)
-
-        # Draw axes labels with octave notation
-        painter.setPen(QPen(Qt.black))
-        painter.setFont(QFont("Arial", 8))
-
-        # Draw frequency labels at octave boundaries
-        for octave_freq in octave_freqs:
-            if octave_freq >= 20 and octave_freq <= 20000:
-                x_pos = x_offset + ((np.log2(octave_freq) - freq_min) / (freq_max - freq_min)) * width
-                if octave_freq >= 1000:
-                    label = f"{octave_freq/1000:.1f}k"
-                else:
-                    label = f"{octave_freq:.0f}"
-                painter.drawText(int(x_pos) - 15, y_offset + height + 15, label)
-
-        painter.drawText(5, y_offset + 10, f"{mag_max:.0f}dB")
-        painter.drawText(5, y_offset + height, f"{mag_min:.0f}dB")
-
 
 class PitchVisualization(BaseVisualizationWidget):
     """Visualization for pitch tracking data."""
@@ -638,6 +494,7 @@ class OctaveSpectrumVisualization(BaseVisualizationWidget):
         # Trigger repaint
         self.update()
 
+
     def paintEvent(self, a0):
         """Paint the octave spectrum visualization."""
         super().paintEvent(a0)
@@ -702,6 +559,7 @@ class ScopeVisualization(BaseVisualizationWidget):
 
         # Trigger repaint
         self.update()
+
 
     def paintEvent(self, a0):
         """Paint the scope visualization."""
@@ -872,6 +730,7 @@ class RawMessageDisplay(QGroupBox):
         # Store the last message
         self.last_message = ""
         self.last_timestamp = ""
+        self.message_count = 0  # Track number of messages
 
         # Layout
         layout = QVBoxLayout(self)
@@ -913,8 +772,17 @@ class RawMessageDisplay(QGroupBox):
         clear_button.clicked.connect(self.clear_messages)
         clear_button.setToolTip("Clear the current message")
         button_layout.addWidget(clear_button)
-
         layout.addLayout(button_layout)
+
+        # Timestamp label
+        self.timestamp_label = QLabel("Last: --:--:--")
+        self.timestamp_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(self.timestamp_label)
+
+        # Count label
+        self.count_label = QLabel("Count: 0")
+        self.count_label.setStyleSheet("color: #666; font-size: 10px;")
+        layout.addWidget(self.count_label)
 
         # Status label
         self.status_label = QLabel("No messages received yet")
@@ -922,36 +790,42 @@ class RawMessageDisplay(QGroupBox):
         layout.addWidget(self.status_label)
 
     def add_message(self, message: str):
-        """Update with the latest raw message (replaces previous)."""
+        """Update with a new message."""
         try:
             # Store the raw message
             self.last_message = message
-            self.last_timestamp = time.strftime("%H:%M:%S.%f")[:-3]  # Include milliseconds
+            self.last_timestamp = time.strftime("%H:%M:%S")
+            self.message_count += 1
 
-            # Format JSON for better readability
+            # Format JSON for better readability (truncated if too long)
             try:
                 parsed = json.loads(message)
                 formatted = json.dumps(parsed, indent=2)
+                
+                # Truncate if too long to fit in display
+                if len(formatted) > 2000:
+                    lines = formatted.split('\n')
+                    if len(lines) > 20:
+                        truncated_lines = lines[:15] + ['    ...', '    [message truncated]', '}']
+                        formatted = '\n'.join(truncated_lines)
+                    else:
+                        formatted = formatted[:1800] + '\n... [truncated]'
+                        
             except json.JSONDecodeError:
-                formatted = message
+                formatted = message[:1800] + ('...' if len(message) > 1800 else '')
 
-            # Create display text
-            display_text = f"[{self.last_timestamp}]\n{formatted}"
+            # Set the text
+            self.text_edit.setPlainText(formatted)
+        except Exception as e:
+            logger.error(f"Error displaying raw message: {e}")
+            error_text = f"Error: {str(e)}\n\nRaw: {message[:200]}..."
+            self.text_edit.setPlainText(error_text)
 
-            # Set the text (replace entirely)
-            self.text_edit.setPlainText(display_text)
-
-            # Update status
-            self.status_label.setText(f"Last message received at {self.last_timestamp}")
-            self.status_label.setStyleSheet("color: #006600; font-size: 10px;")
+            # Update count
+            self.count_label.setText(f"Count: {self.message_count}")
 
             # Enable copy button
             self.copy_button.setEnabled(True)
-
-        except Exception as e:
-            logger.error(f"Error displaying message: {e}")
-            error_text = f"[{time.strftime('%H:%M:%S')}]\nError displaying message: {str(e)}\n\nRaw: {message[:200]}..."
-            self.text_edit.setPlainText(error_text)
 
     def copy_message(self):
         """Copy the current message to clipboard."""
@@ -1087,7 +961,6 @@ class DataVisualizationArea(QWidget):
         """Create visualization widgets for all data types."""
         widget_classes = {
             'levels': LevelsVisualization,
-            'fft_spectrum': SpectrumVisualization,
             'octave_spectrum': OctaveSpectrumVisualization,
             'pitch_tracker': PitchVisualization,
             'scope': ScopeVisualization,
@@ -1117,7 +990,7 @@ class StreamVisualizerWindow(QMainWindow):
         self.websocket_client = websocket_client
 
         # Setup UI
-        self.setWindowTitle("Friture Streaming Visualizer - All Data Types")
+        self.setWindowTitle("Friture Streaming Visualizer")
         self.setGeometry(100, 100, 1400, 900)
 
         # Create central widget
@@ -1239,7 +1112,7 @@ class StreamVisualizerApp:
 
     def __init__(self, host: str = 'localhost', port: int = 8765):
         self.qt_app = QApplication(sys.argv)
-        self.qt_app.setApplicationName("Friture Streaming Visualizer - All Data Types")
+        self.qt_app.setApplicationName("Friture Streaming Visualizer")
         self.qt_app.setApplicationVersion("1.1")
 
         # Create WebSocket client
@@ -1262,7 +1135,7 @@ class StreamVisualizerApp:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Friture Streaming Information Visualizer - Real-time visualization of all Friture data types")
+    parser = argparse.ArgumentParser(description="Friture Streaming Information Visualizer - Real-time visualization of Friture data types")
     parser.add_argument('--host', default='localhost', help='WebSocket server host')
     parser.add_argument('--port', type=int, default=8765, help='WebSocket server port')
 

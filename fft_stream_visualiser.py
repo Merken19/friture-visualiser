@@ -217,10 +217,10 @@ class WebSocketSpectrumClient:
                 self.current_peak_mag = None
 
             # Log successful data update
-            logger.info(f"Updated spectrum data: {len(self.current_frequencies)} points, "
-                        f"freq range: {self.current_frequencies[0]:.1f}-{self.current_frequencies[-1]:.1f} Hz, "
-                        f"mag range: {np.min(self.current_spectrum):.1f}-{np.max(self.current_spectrum):.1f} dB"
-                        f"{' (corrected order)' if freq_array[0] > freq_array[-1] else ''}")
+            # logger.info(f"Updated spectrum data: {len(self.current_frequencies)} points, "
+            #             f"freq range: {self.current_frequencies[0]:.1f}-{self.current_frequencies[-1]:.1f} Hz, "
+            #             f"mag range: {np.min(self.current_spectrum):.1f}-{np.max(self.current_spectrum):.1f} dB"
+            #             f"{' (corrected order)' if freq_array[0] > freq_array[-1] else ''}")
 
         except Exception as e:
             logger.error(f"Error updating spectrum data: {e}")

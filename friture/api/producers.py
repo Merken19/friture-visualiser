@@ -551,7 +551,7 @@ class FFTSpectrumProducer(DataProducer):
                 frequencies = self.widget._last_frequencies.copy()
                 magnitudes_db = self.widget._last_dB_spectrogram.copy()
 
-                self.logger.debug("Using stored processed spectrum data")
+                #self.logger.debug("Using stored processed spectrum data")
 
             else:
                 # Fallback: extract from display buffers (original method)

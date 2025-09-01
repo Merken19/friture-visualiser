@@ -172,7 +172,7 @@ SoundDevice → RingBuffer → Signal Processing → QML Visualization
 
 This section documents the exact data path and key extension points for debugging and extending the API.
 
-**Recent Critical Fixes (December 2024)**:
+**Recent Critical Fixes (December 2024 - January 2025)**:
 
 1. **BufferManager Memory Check Fix**:
    - **Problem**: BufferManager was incorrectly checking total application memory usage against buffer-specific thresholds, causing all data to be rejected (`buffer_rejections` counter increasing rapidly).
@@ -187,6 +187,15 @@ This section documents the exact data path and key extension points for debuggin
      - Maintains `_active_producers` dictionary for tracking
    - **Impact**: All analysis widgets now stream data regardless of when they are opened, providing consistent streaming functionality.
 
+3. **FFT Spectrum Data Synchronization Fix (January 2025)**:
+   - **Problem**: FFTSpectrumProducer was extracting data from intermediate `dispbuffers1` before shape synchronization occurred, causing 8kHz cutoff and 20Hz frequency shift in streamed data compared to original application display.
+   - **Root Cause**: Producer extracted data immediately when audio arrived, but spectrum widget performed shape synchronization (lines 154-156 in `spectrum.py`) after processing but before display.
+   - **Solution**: Modified spectrum widget to store processed dB spectrogram and frequencies after shape synchronization:
+     - Added `_last_dB_spectrogram` and `_last_frequencies` storage in spectrum widget initialization
+     - Store processed data in `handle_new_data()` after shape synchronization but before plot update
+     - Updated FFTSpectrumProducer to use stored processed data as primary method
+   - **Impact**: Eliminates frequency data corruption, ensures exact match with original application display, and provides perfectly synchronized spectrum data for streaming.
+
 1) Data Extraction from Widgets (Producers)
 - Location: `friture/api/producers.py`
 - Base class: `DataProducer` (QObject + ABC)
@@ -195,7 +204,7 @@ This section documents the exact data path and key extension points for debuggin
   - Emission: `_emit_data()` packages the extracted data and emits `data_ready`.
 - Key concrete producers and where they read from:
   - `PitchTrackerProducer`: Reads from `widget.tracker`'s latest estimates (`get_latest_estimate`, `get_latest_confidence`, etc.).
-  - `FFTSpectrumProducer`: Reads from `widget.dispbuffers1` (linear spectrum), converts to dB with weighting applied, and provides `magnitudes_db` and `frequencies`.
+  - `FFTSpectrumProducer`: Reads from stored processed data (`widget._last_dB_spectrogram`, `widget._last_frequencies`) after shape synchronization, ensuring exact match with original application display. Falls back to `widget.dispbuffers1` extraction if stored data unavailable.
   - `OctaveSpectrumProducer`: Reads from `widget.dispbuffers` and applies weighting from `widget.filters`.
   - `LevelsProducer`: Reads from `widget.level_view_model` and its associated `level_data` and `level_data_ballistic` objects.
   - `SpectrogramProducer`: Reads from `widget.spectrogram_data` (timestamps, frequencies, magnitudes).

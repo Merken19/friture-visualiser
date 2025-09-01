@@ -535,38 +535,59 @@ class FFTSpectrumProducer(DataProducer):
             self.error_occurred.emit(str(e))
     
     def extract_data(self) -> Optional[FFTSpectrumData]:
-        """Extract FFT spectrum data from the widget."""
+        """Extract FFT spectrum data from the widget after complete processing."""
         try:
-            if not hasattr(self.widget, 'proc') or not hasattr(self.widget, 'freq'):
-                return None
-
-            # Check if we have processed spectrum data available
-            if not hasattr(self.widget, 'dispbuffers1') or self.widget.dispbuffers1 is None:
+            if not hasattr(self.widget, 'proc'):
                 return None
 
             proc = self.widget.proc
-            frequencies = self.widget.freq.copy()
 
-            # Get the current spectrum data from the widget's display buffers
-            # This contains the exponentially smoothed linear spectrum (same as sp1 in original)
-            linear_spectrum = np.asarray(self.widget.dispbuffers1, dtype=np.float64).copy()
+            # Primary method: Extract from stored processed data (after shape synchronization)
+            if (hasattr(self.widget, '_last_dB_spectrogram') and
+                hasattr(self.widget, '_last_frequencies') and
+                self.widget._last_dB_spectrogram is not None and
+                self.widget._last_frequencies is not None):
 
-            # Recompute dB_spectrogram exactly as original spectrum.py does (line 161)
-            # dB_spectrogram = self.log_spectrogram(sp1) + self.w
-            if hasattr(self.widget, 'log_spectrogram') and hasattr(self.widget, 'w'):
-                magnitudes_db = self.widget.log_spectrogram(linear_spectrum) + self.widget.w.flatten()
+                frequencies = self.widget._last_frequencies.copy()
+                magnitudes_db = self.widget._last_dB_spectrogram.copy()
+
+                self.logger.debug("Using stored processed spectrum data")
+
             else:
-                # Fallback if methods not available
-                epsilon = 1e-30
-                magnitudes_db = 10. * np.log10(linear_spectrum + epsilon)
+                # Fallback: extract from display buffers (original method)
+                self.logger.debug("Using fallback extraction from display buffers")
+                if not hasattr(self.widget, 'dispbuffers1') or self.widget.dispbuffers1 is None:
+                    return None
+
+                frequencies = self.widget.freq.copy()
+                linear_spectrum = np.asarray(self.widget.dispbuffers1, dtype=np.float64).copy()
+
+                # Ensure shapes match
+                min_len = min(len(frequencies), len(linear_spectrum))
+                frequencies = frequencies[:min_len]
+                linear_spectrum = linear_spectrum[:min_len]
+
+                # Convert to dB with proper weighting
+                if hasattr(self.widget, 'log_spectrogram') and hasattr(self.widget, 'w'):
+                    weighting = self.widget.w.flatten()
+                    if len(weighting) > len(linear_spectrum):
+                        weighting = weighting[:len(linear_spectrum)]
+                    elif len(weighting) < len(linear_spectrum):
+                        padding = np.zeros(len(linear_spectrum) - len(weighting))
+                        weighting = np.concatenate([weighting, padding])
+
+                    magnitudes_db = self.widget.log_spectrogram(linear_spectrum) + weighting
+                else:
+                    epsilon = 1e-30
+                    magnitudes_db = 10. * np.log10(linear_spectrum + epsilon)
 
             # Get processing parameters
             fft_size = proc.fft_size
-            window_type = "hann"  # audioproc uses Hann window (fixed)
-            overlap_factor = self.widget.overlap
+            window_type = "hann"
+            overlap_factor = getattr(self.widget, 'overlap', 0.75)
             weighting = self._get_weighting_string()
 
-            # Find peak in the filtered data
+            # Find peak in the data
             if len(magnitudes_db) > 0:
                 peak_idx = np.argmax(magnitudes_db)
                 peak_frequency = frequencies[peak_idx] if peak_idx < len(frequencies) else 0
@@ -578,7 +599,7 @@ class FFTSpectrumProducer(DataProducer):
             return FFTSpectrumData(
                 frequencies=frequencies.copy(),
                 magnitudes_db=magnitudes_db.copy(),
-                phases=None,  # Phase data is not exposed for streaming
+                phases=None,
                 fft_size=fft_size,
                 window_type=window_type,
                 overlap_factor=overlap_factor,
@@ -604,21 +625,34 @@ class FFTSpectrumProducer(DataProducer):
     def get_custom_metadata(self) -> Dict[str, Any]:
         """Get FFT spectrum specific metadata."""
         metadata = {}
-        
+
         if hasattr(self.widget, 'proc'):
             proc = self.widget.proc
+
+            # Use actual frequency range from the computed frequency scale
+            if hasattr(self.widget, 'freq') and len(self.widget.freq) > 0:
+                metadata.update({
+                    'min_freq': float(self.widget.freq[0]),
+                    'max_freq': float(self.widget.freq[-1]),
+                })
+            else:
+                # Fallback to sampling rate calculation
+                from ..audiobackend import SAMPLING_RATE
+                metadata.update({
+                    'min_freq': 0.0,
+                    'max_freq': float(SAMPLING_RATE // 2),
+                })
+
             metadata.update({
                 'fft_size': getattr(proc, 'fft_size', 0),
                 'window_type': 'hann',
                 'overlap_factor': getattr(self.widget, 'overlap', 0.0),
                 'weighting': self._get_weighting_string(),
                 "value_domain": "linear_amplitude",
-                'min_freq': getattr(self.widget, 'minfreq', 0),
-                'max_freq': getattr(self.widget, 'maxfreq', 22000),
                 'spec_min_db': -100,
                 'spec_max_db': -20
             })
-        
+
         return metadata
 
 

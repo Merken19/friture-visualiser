@@ -70,6 +70,10 @@ class Spectrum_Widget(QObject):
         # set kernel and parameters for the smoothing filter
         self.setresponsetime(self.response_time)
 
+        # store last processed spectrum data for API access
+        self._last_dB_spectrogram = None
+        self._last_frequencies = None
+
         self.PlotZoneSpect.setfreqscale(fscales.Mel) # matches DEFAULT_FREQ_SCALE = 2 #Mel
         self.PlotZoneSpect.setfreqrange(self.minfreq, self.maxfreq)
         self.PlotZoneSpect.setspecrange(self.spec_min, self.spec_max)
@@ -170,6 +174,10 @@ class Spectrum_Widget(QObject):
             harmonic_products = self.harmonic_product_spectrum(sp1)
             pitch_idx = argmax(harmonic_products)
             fpitch = max(self.freq[pitch_idx], 1e-20)
+
+            # Store the processed data for API access (after shape synchronization)
+            self._last_dB_spectrogram = dB_spectrogram.copy()
+            self._last_frequencies = self.freq.copy()
 
             self.PlotZoneSpect.setdata(self.freq, dB_spectrogram, fmax, fpitch)
 

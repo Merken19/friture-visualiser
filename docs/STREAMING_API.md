@@ -124,6 +124,11 @@ class FFTSpectrumData:
 - The data matches the original Friture spectrum widget's internal representation
 - Peak magnitude is also in dB scale
 
+**Data Synchronization (January 2025)**:
+- **Issue**: FFTSpectrumProducer was extracting data from intermediate buffers before shape synchronization, causing 8kHz cutoff and 20Hz frequency shift issues
+- **Solution**: Modified spectrum widget to store processed dB data after shape synchronization, ensuring producer extracts perfectly synchronized data
+- **Impact**: Eliminates frequency data corruption and ensures exact match with original application display
+
 **Example Usage:**
 ```python
 def spectrum_handler(data):

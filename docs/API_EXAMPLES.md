@@ -55,17 +55,18 @@ def analyze_spectrum():
     
     def spectrum_callback(data):
         spectrum = data.data
-        
-        # Find dominant frequencies
+
+        # Find dominant frequencies (convert linear to dB for analysis)
         threshold_db = -30
-        dominant_mask = spectrum.magnitudes_db > threshold_db
+        magnitudes_db = 20 * np.log10(spectrum.magnitudes_linear + 1e-30)
+        dominant_mask = magnitudes_db > threshold_db
         dominant_freqs = spectrum.frequencies[dominant_mask]
-        dominant_mags = spectrum.magnitudes_db[dominant_mask]
-        
+        dominant_mags_db = magnitudes_db[dominant_mask]
+
         if len(dominant_freqs) > 0:
             print(f"Dominant frequencies:")
-            for freq, mag in zip(dominant_freqs[:5], dominant_mags[:5]):
-                print(f"  {freq:.1f} Hz: {mag:.1f} dB")
+            for freq, mag_db in zip(dominant_freqs[:5], dominant_mags_db[:5]):
+                print(f"  {freq:.1f} Hz: {mag_db:.1f} dB")
             print()
     
     consumer = CallbackConsumer(spectrum_callback)
@@ -130,14 +131,16 @@ class WebDashboard:
     
     def send_spectrum_data(self, data):
         spectrum = data.data
-        
+
         # Downsample for web (every 4th point)
         step = 4
+        # Convert linear magnitudes to dB for web display
+        magnitudes_db = 20 * np.log10(spectrum.magnitudes_linear + 1e-30)
         message = {
             'type': 'spectrum',
             'data': {
                 'frequencies': spectrum.frequencies[::step].tolist(),
-                'magnitudes': spectrum.magnitudes_db[::step].tolist(),
+                'magnitudes': magnitudes_db[::step].tolist(),
                 'peak_frequency': spectrum.peak_frequency,
                 'timestamp': data.metadata.timestamp
             }
@@ -413,22 +416,21 @@ class SpectralFeatureExtractor:
     
     def extract_features(self, data):
         spectrum = data.data
-        
+
         # Calculate spectral features
         features = self.calculate_spectral_features(
-            spectrum.frequencies, 
-            spectrum.magnitudes_db
+            spectrum.frequencies,
+            spectrum.magnitudes_linear
         )
-        
+
         print(f"Spectral Features:")
         for name, value in features.items():
             print(f"  {name}: {value:.2f}")
         print()
     
-    def calculate_spectral_features(self, frequencies, magnitudes_db):
+    def calculate_spectral_features(self, frequencies, magnitudes_linear):
         """Calculate various spectral features."""
-        # Convert to linear scale
-        magnitudes_linear = 10.0 ** (magnitudes_db / 20.0)
+        # Input is already in linear scale
         
         # Normalize
         total_energy = np.sum(magnitudes_linear)

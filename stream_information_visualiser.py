@@ -17,6 +17,12 @@ Features:
 - Copy-to-clipboard functionality for raw messages
 - Comprehensive statistics and connection monitoring
 - Crash-resistant design with proper error handling
+- Octave-scaled frequency spectrum display with lower frequency visibility
+
+Configuration Notes:
+- For 25ms response time: Set response_time=0.025 in the source spectrum widget
+- Spectrum uses octave scaling (log2) for better musical frequency representation
+- Lower frequencies (down to 20Hz) are now visible in the display
 """
 
 import sys
@@ -392,10 +398,10 @@ class LevelsVisualization(BaseVisualizationWidget):
 
 
 class SpectrumVisualization(BaseVisualizationWidget):
-    """Visualization for FFT spectrum data."""
+    """Visualization for FFT spectrum data with octave scaling."""
 
     def __init__(self, parent=None):
-        super().__init__("fft_spectrum", "Frequency Spectrum", parent)
+        super().__init__("fft_spectrum", "Frequency Spectrum (Octave Scale)", parent)
         self.frequencies = np.array([])
         self.magnitudes = np.array([])
 
@@ -407,8 +413,15 @@ class SpectrumVisualization(BaseVisualizationWidget):
         data = self.latest_data['data']
 
         # Extract spectrum data
+        # magnitudes_linear contains power spectrum values in linear scale (not dB)
+        # These are exponentially smoothed and include frequency weighting
+        # NOTE: For 25ms response time, ensure the source spectrum widget has
+        # response_time set to 0.025 seconds
         self.frequencies = np.array(data.get('frequencies', []))
         self.magnitudes = np.array(data.get('magnitudes_linear', []))
+
+        # Update status to show octave scaling
+        self.status_label.setText("Receiving data (Octave Scale)")
 
         # Trigger repaint
         self.update()
@@ -429,38 +442,49 @@ class SpectrumVisualization(BaseVisualizationWidget):
         x_offset = 10
         y_offset = 60
 
-        # Calculate scaling
-        # Get dynamic range from metadata if available, otherwise use defaults
-        metadata = self.latest_data.get('metadata', {}).get('custom_metadata', {})
-        mag_min = metadata.get('spec_min_db', -100)
-        mag_max = metadata.get('spec_max_db', -20)
 
         # Convert linear magnitude to dB for visualization
-        epsilon = 1e-20  # Conservative epsilon for very small values
-        magnitudes_db = 20 * np.log10(np.maximum(self.magnitudes, epsilon))
+        # First, let's see what the raw linear values look like
+        print(f"Raw linear values: min={np.min(self.magnitudes):.2e}, max={np.max(self.magnitudes):.2e}")
 
-        # Debug: Check the raw conversion
-        print(f"Raw dB conversion: {np.min(magnitudes_db):.1f} to {np.max(magnitudes_db):.1f} dB")
+        # The linear values are power spectrum (already squared), so use 10*log10 for dB conversion
+        # Add a reference level to get meaningful dB values
+        epsilon = 1e-30
+        reference_level = 1e-6  # More reasonable reference for audio power spectrum
+        magnitudes_db = 10 * np.log10(np.maximum(self.magnitudes, epsilon) / reference_level)
 
-        # The linear values are likely normalized relative to min_dB (-100dB)
-        # Add the min_dB offset to get absolute dB values
-        min_db_offset = metadata.get('spec_min_db', -100)
-        magnitudes_db = magnitudes_db + min_db_offset
+        # Debug: Check the conversion
+        print(f"dB conversion: {np.min(magnitudes_db):.1f} to {np.max(magnitudes_db):.1f} dB")
 
-        print(f"After adding {min_db_offset}dB offset: {np.min(magnitudes_db):.1f} to {np.max(magnitudes_db):.1f} dB")
+        # Calculate scaling for dB display
+        # Use dynamic range based on actual data for better visualization
+        if len(magnitudes_db) > 0:
+            # Use 90th percentile as max, 10th percentile as min
+            mag_max = float(np.percentile(magnitudes_db, 90))
+            mag_min = float(np.percentile(magnitudes_db, 10))
+            # Ensure reasonable range
+            mag_min = max(mag_min, mag_max - 80)  # At least 80dB range
+            mag_max = min(mag_max, 0)  # Don't go above 0 dB
+            mag_min = max(mag_min, -120)  # Don't go below -120 dB
+        else:
+            mag_min = -100
+            mag_max = -20
 
-        # Use the expected dB range from metadata for visualization
-        mag_min = metadata.get('spec_min_db', -100)
-        mag_max = metadata.get('spec_max_db', -20)
-
-        print(f"Using display range: {mag_min} to {mag_max} dB")
+        print(f"Display range: {mag_min:.1f} to {mag_max:.1f} dB")
 
         # Ensure min/max frequencies are valid
         valid_freqs = self.frequencies[self.frequencies > 0]
         if len(valid_freqs) == 0:
             return  # Can't draw if no valid frequencies
-        freq_min = np.log10(max(20, np.min(valid_freqs)))
-        freq_max = np.log10(max(20000, np.max(valid_freqs)))
+
+        # Use octave scaling (log2) instead of log10 for better musical frequency representation
+        freq_min = np.log2(max(20, np.min(valid_freqs)))
+        freq_max = np.log2(max(20000, np.max(valid_freqs)))
+
+        # Extend the range to show lower octaves (down to 20Hz and below if needed)
+        freq_min = min(freq_min, np.log2(20))  # Ensure we show down to 20Hz
+        freq_max = max(freq_max, np.log2(20000))  # Ensure we show up to 20kHz
+
         if freq_min >= freq_max:
             return # Avoid division by zero
 
@@ -474,8 +498,8 @@ class SpectrumVisualization(BaseVisualizationWidget):
             if freq <= 0:
                 continue
 
-            # Logarithmic frequency scaling
-            x = x_offset + ((np.log10(freq) - freq_min) / (freq_max - freq_min)) * width
+            # Octave frequency scaling (log2)
+            x = x_offset + ((np.log2(freq) - freq_min) / (freq_max - freq_min)) * width
 
             # Magnitude scaling (invert Y axis)
             y = y_offset + (1 - (max(mag_min, min(mag_max, mag)) - mag_min) / (mag_max - mag_min)) * height
@@ -487,10 +511,28 @@ class SpectrumVisualization(BaseVisualizationWidget):
 
         painter.drawPath(path)
 
-        # Draw axes labels
+        # Draw octave boundary lines
+        painter.setPen(QPen(QColor(200, 200, 200), 1, Qt.DotLine))
+        octave_freqs = [31.25, 62.5, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+        for octave_freq in octave_freqs:
+            if octave_freq >= 20 and octave_freq <= 20000:
+                x_pos = x_offset + ((np.log2(octave_freq) - freq_min) / (freq_max - freq_min)) * width
+                painter.drawLine(int(x_pos), y_offset, int(x_pos), y_offset + height)
+
+        # Draw axes labels with octave notation
         painter.setPen(QPen(Qt.black))
-        painter.drawText(x_offset, y_offset + height + 15, "20Hz")
-        painter.drawText(x_offset + width - 30, y_offset + height + 15, "20kHz")
+        painter.setFont(QFont("Arial", 8))
+
+        # Draw frequency labels at octave boundaries
+        for octave_freq in octave_freqs:
+            if octave_freq >= 20 and octave_freq <= 20000:
+                x_pos = x_offset + ((np.log2(octave_freq) - freq_min) / (freq_max - freq_min)) * width
+                if octave_freq >= 1000:
+                    label = f"{octave_freq/1000:.1f}k"
+                else:
+                    label = f"{octave_freq:.0f}"
+                painter.drawText(int(x_pos) - 15, y_offset + height + 15, label)
+
         painter.drawText(5, y_offset + 10, f"{mag_max:.0f}dB")
         painter.drawText(5, y_offset + height, f"{mag_min:.0f}dB")
 

@@ -115,19 +115,29 @@ class FFTSpectrumData:
     overlap_factor: float            # Overlap factor [0.0, 1.0)
     weighting: str                   # Frequency weighting ("A", "B", "C", "none")
     peak_frequency: float            # Frequency of peak magnitude
-    peak_magnitude: float            # Peak magnitude in dB
+    peak_magnitude: float            # Peak magnitude in linear scale
 ```
+
+**Important Notes:**
+- `magnitudes_linear` contains **power spectrum values in linear scale**, not dB
+- To convert to dB: `magnitudes_db = 20 * np.log10(magnitudes_linear + epsilon)`
+- Values typically range from 0 to ~1.0 for normalized audio signals
+- The data is exponentially smoothed and includes frequency weighting
 
 **Example Usage:**
 ```python
 def spectrum_handler(data):
     spectrum = data.data
-    
+
+    # Convert linear magnitudes to dB for analysis
+    epsilon = 1e-30
+    magnitudes_db = 20 * np.log10(spectrum.magnitudes_linear + epsilon)
+
     # Find frequencies above threshold
     threshold_db = -40
-    loud_bins = spectrum.magnitudes_linear > threshold_db
+    loud_bins = magnitudes_db > threshold_db
     loud_frequencies = spectrum.frequencies[loud_bins]
-    
+
     if len(loud_frequencies) > 0:
         print(f"Active frequencies: {loud_frequencies}")
 ```

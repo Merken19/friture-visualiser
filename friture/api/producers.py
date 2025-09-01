@@ -548,16 +548,17 @@ class FFTSpectrumProducer(DataProducer):
             frequencies = self.widget.freq.copy()
 
             # Get the current spectrum data from the widget's display buffers
-            # This contains linear magnitude values
+            # This contains the exponentially smoothed linear spectrum (same as sp1 in original)
             linear_spectrum = np.asarray(self.widget.dispbuffers1, dtype=np.float64).copy()
 
-            # Convert to dB scale (matching original spectrum.py implementation)
-            epsilon = 1e-30
-            magnitudes_db = 10. * np.log10(linear_spectrum + epsilon)
-
-            # Apply weighting if present (in dB domain, matching original)
-            if hasattr(self.widget, 'w') and self.widget.w is not None:
-                magnitudes_db = magnitudes_db + self.widget.w.flatten()
+            # Recompute dB_spectrogram exactly as original spectrum.py does (line 161)
+            # dB_spectrogram = self.log_spectrogram(sp1) + self.w
+            if hasattr(self.widget, 'log_spectrogram') and hasattr(self.widget, 'w'):
+                magnitudes_db = self.widget.log_spectrogram(linear_spectrum) + self.widget.w.flatten()
+            else:
+                # Fallback if methods not available
+                epsilon = 1e-30
+                magnitudes_db = 10. * np.log10(linear_spectrum + epsilon)
 
             # Get processing parameters
             fft_size = proc.fft_size
@@ -565,7 +566,7 @@ class FFTSpectrumProducer(DataProducer):
             overlap_factor = self.widget.overlap
             weighting = self._get_weighting_string()
 
-            # Find peak
+            # Find peak in the filtered data
             if len(magnitudes_db) > 0:
                 peak_idx = np.argmax(magnitudes_db)
                 peak_frequency = frequencies[peak_idx] if peak_idx < len(frequencies) else 0

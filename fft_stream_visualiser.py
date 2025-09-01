@@ -174,13 +174,61 @@ class WebSocketSpectrumClient:
             data = parsed_data['data']
 
             # Extract spectrum data
-            self.current_frequencies = np.array(data.get('frequencies', []))
-            self.current_spectrum = np.array(data.get('magnitudes_db', []))
-            self.current_peak_freq = data.get('peak_frequency')
-            self.current_peak_mag = data.get('peak_magnitude')
+            frequencies = data.get('frequencies', [])
+            magnitudes_db = data.get('magnitudes_db', [])
+            peak_freq = data.get('peak_frequency')
+            peak_mag = data.get('peak_magnitude')
+
+            # Validate data
+            if not frequencies or not magnitudes_db:
+                logger.warning("Received empty frequency or magnitude data")
+                return
+
+            if len(frequencies) != len(magnitudes_db):
+                logger.warning(f"Data length mismatch: frequencies={len(frequencies)}, magnitudes={len(magnitudes_db)}")
+                return
+
+            # Convert to numpy arrays
+            freq_array = np.array(frequencies, dtype=np.float64)
+            mag_array = np.array(magnitudes_db, dtype=np.float64)
+
+            # Check if arrays are reversed (common issue in FFT processing)
+            # If low frequencies are at the end and high frequencies at the beginning,
+            # reverse both arrays to match the expected order (low to high frequency)
+            if len(freq_array) > 1 and freq_array[0] > freq_array[-1]:
+                logger.info("Detected reversed frequency array, correcting order")
+                freq_array = freq_array[::-1]
+                mag_array = mag_array[::-1]
+
+            self.current_frequencies = freq_array
+            self.current_spectrum = mag_array
+
+            # Validate peak data
+            if peak_freq is not None and peak_mag is not None:
+                if np.isfinite(peak_freq) and np.isfinite(peak_mag):
+                    self.current_peak_freq = float(peak_freq)
+                    self.current_peak_mag = float(peak_mag)
+                else:
+                    logger.warning(f"Invalid peak data: freq={peak_freq}, mag={peak_mag}")
+                    self.current_peak_freq = None
+                    self.current_peak_mag = None
+            else:
+                self.current_peak_freq = None
+                self.current_peak_mag = None
+
+            # Log successful data update
+            logger.info(f"Updated spectrum data: {len(self.current_frequencies)} points, "
+                        f"freq range: {self.current_frequencies[0]:.1f}-{self.current_frequencies[-1]:.1f} Hz, "
+                        f"mag range: {np.min(self.current_spectrum):.1f}-{np.max(self.current_spectrum):.1f} dB"
+                        f"{' (corrected order)' if freq_array[0] > freq_array[-1] else ''}")
 
         except Exception as e:
             logger.error(f"Error updating spectrum data: {e}")
+            # Reset data on error
+            self.current_frequencies = None
+            self.current_spectrum = None
+            self.current_peak_freq = None
+            self.current_peak_mag = None
 
 
 class FFTStreamVisualizer:
@@ -234,13 +282,13 @@ class FFTStreamVisualizer:
         # Set logarithmic x-axis
         self.ax.set_xscale('log')
 
-        # Set axis ranges (will be updated with real data)
+        # Set initial axis ranges (will be updated with real data)
         self.ax.set_xlim(20, 20000)
-        self.ax.set_ylim(-100, -20)
+        self.ax.set_ylim(-100, 0)  # Allow positive dB values for peaks
 
         # Configure tick formatters
         self.ax.xaxis.set_major_formatter(ticker.FuncFormatter(self.freq_formatter))
-        self.ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: '.1f'))
+        self.ax.yaxis.set_major_formatter(ticker.FuncFormatter(self.db_formatter))
 
         # Title
         self.ax.set_title('Friture FFT Spectrum - Real-time', color='white',
@@ -269,13 +317,17 @@ class FFTStreamVisualizer:
     def freq_formatter(self, x, pos):
         """Format frequency values for display."""
         if x >= 1000:
-            return '.0f'
+            return f'{x/1000:.0f}k'
         elif x >= 100:
-            return '.0f'
+            return f'{x:.0f}'
         elif x >= 10:
-            return '.1f'
+            return f'{x:.1f}'
         else:
-            return '.2f'
+            return f'{x:.2f}'
+
+    def db_formatter(self, x, pos):
+        """Format dB values for display."""
+        return f'{x:.0f}'
 
     def setup_websocket_client(self):
         """Setup the WebSocket client."""
@@ -292,33 +344,70 @@ class FFTStreamVisualizer:
         self.current_peak_mag = self.ws_client.current_peak_mag
 
         if self.current_spectrum is not None and self.current_frequencies is not None:
-            # Update spectrum line
-            self.spectrum_line.set_data(self.current_frequencies, self.current_spectrum)
+            # Validate data lengths match
+            if len(self.current_spectrum) == len(self.current_frequencies) and len(self.current_spectrum) > 0:
+                # Filter out invalid values (NaN, inf)
+                valid_indices = np.isfinite(self.current_spectrum) & np.isfinite(self.current_frequencies)
+                if np.any(valid_indices):
+                    valid_freqs = self.current_frequencies[valid_indices]
+                    valid_mags = self.current_spectrum[valid_indices]
 
-            # Update peak display
-            if self.current_peak_freq is not None and self.current_peak_mag is not None:
-                peak_freqs = [self.current_peak_freq]
-                peak_mags = [self.current_peak_mag]
-                self.peak_line.set_data(peak_freqs, peak_mags)
-                self.peak_marker.set_offsets(np.column_stack([peak_freqs, peak_mags]))
+                    # Update spectrum line
+                    self.spectrum_line.set_data(valid_freqs, valid_mags)
 
-                # Update frequency label
-                if self.current_peak_freq < 200:
-                    freq_text = '.1f'
+                    # Update peak display
+                    if self.current_peak_freq is not None and self.current_peak_mag is not None:
+                        # Ensure peak values are within valid range
+                        if (self.current_peak_freq >= valid_freqs[0] and
+                            self.current_peak_freq <= valid_freqs[-1] and
+                            np.isfinite(self.current_peak_mag)):
+                            peak_freqs = [self.current_peak_freq]
+                            peak_mags = [self.current_peak_mag]
+                            self.peak_line.set_data(peak_freqs, peak_mags)
+                            self.peak_marker.set_offsets(np.column_stack([peak_freqs, peak_mags]))
+
+                            # Update frequency label
+                            if self.current_peak_freq < 1000:
+                                freq_text = f'{self.current_peak_freq:.1f} Hz'
+                            else:
+                                freq_text = f'{self.current_peak_freq/1000:.1f} kHz'
+                            self.freq_label.set_text(freq_text)
+                        else:
+                            # Hide peak markers if invalid
+                            self.peak_line.set_data([], [])
+                            self.peak_marker.set_offsets(np.empty((0, 2)))
+                            self.freq_label.set_text('')
+
+                    # Update axis ranges
+                    freq_min = max(20, valid_freqs[0])
+                    freq_max = min(20000, valid_freqs[-1])
+                    self.ax.set_xlim(freq_min, freq_max)
+
+                    # Calculate magnitude range with proper bounds
+                    mag_min = float(np.min(valid_mags))
+                    mag_max = float(np.max(valid_mags))
+
+                    # Set reasonable dB range (typical audio spectrum range)
+                    if mag_max > mag_min:
+                        # Add padding and ensure reasonable range
+                        y_min = max(-120.0, mag_min - 10.0)
+                        y_max = min(20.0, mag_max + 10.0)  # Allow up to +20 dB for peaks
+                        self.ax.set_ylim(y_min, y_max)
+                    else:
+                        # Default range if all values are the same
+                        self.ax.set_ylim(-100.0, -20.0)
                 else:
-                    freq_text = '.0f'
-                self.freq_label.set_text('.1f')
-
-            # Update axis ranges if needed
-            if len(self.current_frequencies) > 0:
-                freq_min = max(20, self.current_frequencies[0])
-                freq_max = min(20000, self.current_frequencies[-1])
-                self.ax.set_xlim(freq_min, freq_max)
-
-                if len(self.current_spectrum) > 0:
-                    mag_min = np.min(self.current_spectrum) - 5
-                    mag_max = np.max(self.current_spectrum) + 5
-                    self.ax.set_ylim(max(-120, mag_min), min(0, mag_max))
+                    # No valid data, clear the plot
+                    self.spectrum_line.set_data([], [])
+                    self.peak_line.set_data([], [])
+                    self.peak_marker.set_offsets(np.empty((0, 2)))
+                    self.freq_label.set_text('')
+            else:
+                # Data length mismatch or empty, clear the plot
+                self.spectrum_line.set_data([], [])
+                self.peak_line.set_data([], [])
+                self.peak_marker.set_offsets(np.empty((0, 2)))
+                self.freq_label.set_text('')
 
         return self.spectrum_line, self.peak_line, self.peak_marker, self.freq_label
 

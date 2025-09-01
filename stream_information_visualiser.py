@@ -435,6 +435,26 @@ class SpectrumVisualization(BaseVisualizationWidget):
         mag_min = metadata.get('spec_min_db', -100)
         mag_max = metadata.get('spec_max_db', -20)
 
+        # Convert linear magnitude to dB for visualization
+        epsilon = 1e-20  # Conservative epsilon for very small values
+        magnitudes_db = 20 * np.log10(np.maximum(self.magnitudes, epsilon))
+
+        # Debug: Check the raw conversion
+        print(f"Raw dB conversion: {np.min(magnitudes_db):.1f} to {np.max(magnitudes_db):.1f} dB")
+
+        # The linear values are likely normalized relative to min_dB (-100dB)
+        # Add the min_dB offset to get absolute dB values
+        min_db_offset = metadata.get('spec_min_db', -100)
+        magnitudes_db = magnitudes_db + min_db_offset
+
+        print(f"After adding {min_db_offset}dB offset: {np.min(magnitudes_db):.1f} to {np.max(magnitudes_db):.1f} dB")
+
+        # Use the expected dB range from metadata for visualization
+        mag_min = metadata.get('spec_min_db', -100)
+        mag_max = metadata.get('spec_max_db', -20)
+
+        print(f"Using display range: {mag_min} to {mag_max} dB")
+
         # Ensure min/max frequencies are valid
         valid_freqs = self.frequencies[self.frequencies > 0]
         if len(valid_freqs) == 0:
@@ -449,10 +469,6 @@ class SpectrumVisualization(BaseVisualizationWidget):
 
         path = QPainterPath()
         path.moveTo(x_offset, y_offset + height)
-
-        # Convert linear magnitude to dB for visualization
-        epsilon = 1e-12
-        magnitudes_db = 20 * np.log10(self.magnitudes + epsilon)
 
         for i, (freq, mag) in enumerate(zip(self.frequencies, magnitudes_db)):
             if freq <= 0:
@@ -475,8 +491,8 @@ class SpectrumVisualization(BaseVisualizationWidget):
         painter.setPen(QPen(Qt.black))
         painter.drawText(x_offset, y_offset + height + 15, "20Hz")
         painter.drawText(x_offset + width - 30, y_offset + height + 15, "20kHz")
-        painter.drawText(5, y_offset + 10, f"{int(mag_max)}dB")
-        painter.drawText(5, y_offset + height, f"{int(mag_min)}dB")
+        painter.drawText(5, y_offset + 10, f"{mag_max:.0f}dB")
+        painter.drawText(5, y_offset + height, f"{mag_min:.0f}dB")
 
 
 class PitchVisualization(BaseVisualizationWidget):

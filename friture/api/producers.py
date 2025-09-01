@@ -548,12 +548,14 @@ class FFTSpectrumProducer(DataProducer):
             frequencies = self.widget.freq.copy()
 
             # Get the current spectrum data from the widget's display buffers
-            # This is the processed and smoothed spectrum data
+            # This contains linear magnitude values (normalized to the display range)
             magnitudes_linear = np.asarray(self.widget.dispbuffers1, dtype=np.float64).copy()
 
-            # Apply weighting if present
-            # if hasattr(self.widget, 'w') and self.widget.w is not None:
-            #     magnitudes_db = magnitudes_db + self.widget.w.flatten()
+            # Apply weighting if present (in linear domain)
+            if hasattr(self.widget, 'w') and self.widget.w is not None:
+                # Convert weighting from dB to linear and apply
+                weighting_linear = 10 ** (self.widget.w.flatten() / 20.0)
+                magnitudes_linear = magnitudes_linear * weighting_linear
 
             # Get processing parameters
             fft_size = proc.fft_size

@@ -549,11 +549,11 @@ class FFTSpectrumProducer(DataProducer):
 
             # Get the current spectrum data from the widget's display buffers
             # This is the processed and smoothed spectrum data
-            magnitudes_db = self.widget.dispbuffers1.copy()
+            magnitudes_linear = np.asarray(self.widget.dispbuffers1, dtype=np.float64).copy()
 
             # Apply weighting if present
-            if hasattr(self.widget, 'w') and self.widget.w is not None:
-                magnitudes_db = magnitudes_db + self.widget.w.flatten()
+            # if hasattr(self.widget, 'w') and self.widget.w is not None:
+            #     magnitudes_db = magnitudes_db + self.widget.w.flatten()
 
             # Get processing parameters
             fft_size = proc.fft_size
@@ -562,17 +562,17 @@ class FFTSpectrumProducer(DataProducer):
             weighting = self._get_weighting_string()
 
             # Find peak
-            if len(magnitudes_db) > 0:
-                peak_idx = np.argmax(magnitudes_db)
+            if len(magnitudes_linear) > 0:
+                peak_idx = np.argmax(magnitudes_linear)
                 peak_frequency = frequencies[peak_idx] if peak_idx < len(frequencies) else 0
-                peak_magnitude = magnitudes_db[peak_idx]
+                peak_magnitude = magnitudes_linear[peak_idx]
             else:
                 peak_frequency = 0
-                peak_magnitude = -100
+                peak_magnitude = 0
 
             return FFTSpectrumData(
                 frequencies=frequencies.copy(),
-                magnitudes_db=magnitudes_db.copy(),
+                magnitudes_linear=magnitudes_linear.copy(),
                 phases=None,  # Phase data is not exposed for streaming
                 fft_size=fft_size,
                 window_type=window_type,
@@ -607,10 +607,11 @@ class FFTSpectrumProducer(DataProducer):
                 'window_type': 'hann',
                 'overlap_factor': getattr(self.widget, 'overlap', 0.0),
                 'weighting': self._get_weighting_string(),
+                "value_domain": "linear_amplitude",
                 'min_freq': getattr(self.widget, 'minfreq', 0),
                 'max_freq': getattr(self.widget, 'maxfreq', 22000),
-                'spec_min_db': getattr(self.widget, 'spec_min', -100),
-                'spec_max_db': getattr(self.widget, 'spec_max', 0)
+                'spec_min_db': -100,
+                'spec_max_db': -20
             })
         
         return metadata

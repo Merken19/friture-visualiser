@@ -215,8 +215,8 @@ class StreamingWebSocketClient(QObject):
                 return 1
 
             elif data_type == 'fft_spectrum':
-                if 'magnitudes_db' in data_payload:
-                    return len(data_payload['magnitudes_db'])
+                if 'magnitudes_linear' in data_payload:
+                    return len(data_payload['magnitudes_linear'])
                 return 1
 
             elif data_type == 'octave_spectrum':
@@ -408,7 +408,7 @@ class SpectrumVisualization(BaseVisualizationWidget):
 
         # Extract spectrum data
         self.frequencies = np.array(data.get('frequencies', []))
-        self.magnitudes = np.array(data.get('magnitudes_db', []))
+        self.magnitudes = np.array(data.get('magnitudes_linear', []))
 
         # Trigger repaint
         self.update()
@@ -417,7 +417,7 @@ class SpectrumVisualization(BaseVisualizationWidget):
         """Paint the spectrum visualization."""
         super().paintEvent(a0)
 
-        if len(self.frequencies) == 0 or len(self.magnitudes) == 0:
+        if not self.latest_data or len(self.frequencies) == 0 or len(self.magnitudes) == 0:
             return
 
         painter = QPainter(self)
@@ -430,10 +430,19 @@ class SpectrumVisualization(BaseVisualizationWidget):
         y_offset = 60
 
         # Calculate scaling
-        freq_min = np.log10(max(20, np.min(self.frequencies)))  # Min 20 Hz
-        freq_max = np.log10(max(20000, np.max(self.frequencies)))  # Max 20 kHz
-        mag_min = -80  # -80 dB
-        mag_max = 0    # 0 dB
+        # Get dynamic range from metadata if available, otherwise use defaults
+        metadata = self.latest_data.get('metadata', {}).get('custom_metadata', {})
+        mag_min = metadata.get('spec_min_db', -100)
+        mag_max = metadata.get('spec_max_db', -20)
+
+        # Ensure min/max frequencies are valid
+        valid_freqs = self.frequencies[self.frequencies > 0]
+        if len(valid_freqs) == 0:
+            return  # Can't draw if no valid frequencies
+        freq_min = np.log10(max(20, np.min(valid_freqs)))
+        freq_max = np.log10(max(20000, np.max(valid_freqs)))
+        if freq_min >= freq_max:
+            return # Avoid division by zero
 
         # Draw spectrum
         painter.setPen(QPen(QColor(0, 100, 200), 2))
@@ -441,12 +450,16 @@ class SpectrumVisualization(BaseVisualizationWidget):
         path = QPainterPath()
         path.moveTo(x_offset, y_offset + height)
 
-        for i, (freq, mag) in enumerate(zip(self.frequencies, self.magnitudes)):
+        # Convert linear magnitude to dB for visualization
+        epsilon = 1e-12
+        magnitudes_db = 20 * np.log10(self.magnitudes + epsilon)
+
+        for i, (freq, mag) in enumerate(zip(self.frequencies, magnitudes_db)):
             if freq <= 0:
                 continue
 
             # Logarithmic frequency scaling
-            x = x_offset + (np.log10(freq) - freq_min) / (freq_max - freq_min) * width
+            x = x_offset + ((np.log10(freq) - freq_min) / (freq_max - freq_min)) * width
 
             # Magnitude scaling (invert Y axis)
             y = y_offset + (1 - (max(mag_min, min(mag_max, mag)) - mag_min) / (mag_max - mag_min)) * height
@@ -462,8 +475,8 @@ class SpectrumVisualization(BaseVisualizationWidget):
         painter.setPen(QPen(Qt.black))
         painter.drawText(x_offset, y_offset + height + 15, "20Hz")
         painter.drawText(x_offset + width - 30, y_offset + height + 15, "20kHz")
-        painter.drawText(5, y_offset + 10, "0dB")
-        painter.drawText(5, y_offset + height, "-80dB")
+        painter.drawText(5, y_offset + 10, f"{int(mag_max)}dB")
+        painter.drawText(5, y_offset + height, f"{int(mag_min)}dB")
 
 
 class PitchVisualization(BaseVisualizationWidget):

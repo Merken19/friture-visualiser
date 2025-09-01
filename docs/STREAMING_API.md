@@ -108,7 +108,7 @@ def pitch_handler(data):
 @dataclass
 class FFTSpectrumData:
     frequencies: np.ndarray           # Frequency bins in Hz
-    magnitudes_db: np.ndarray        # Magnitude spectrum in dB
+    magnitudes_linear: np.ndarray    # Magnitude spectrum in linear scale
     phases: Optional[np.ndarray]     # Phase spectrum in radians
     fft_size: int                    # FFT size used
     window_type: str                 # Window function ("hann", etc.)
@@ -125,7 +125,7 @@ def spectrum_handler(data):
     
     # Find frequencies above threshold
     threshold_db = -40
-    loud_bins = spectrum.magnitudes_db > threshold_db
+    loud_bins = spectrum.magnitudes_linear > threshold_db
     loud_frequencies = spectrum.frequencies[loud_bins]
     
     if len(loud_frequencies) > 0:
@@ -460,7 +460,7 @@ class AudioDashboard:
         message = {
             'type': 'spectrum_update',
             'frequencies': spectrum.frequencies[::step].tolist(),
-            'magnitudes': spectrum.magnitudes_db[::step].tolist(),
+            'magnitudes': spectrum.magnitudes_linear[::step].tolist(),
             'peak_freq': spectrum.peak_frequency
         }
         self.websocket.send_data(json.dumps(message))

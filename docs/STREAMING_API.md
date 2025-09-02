@@ -7,7 +7,7 @@ The Friture Streaming API provides real-time access to audio analysis data from 
 ## Key Features
 
 - **Zero-Overhead Design**: No performance impact when no consumers are active
-- **Multiple Data Types**: Support for pitch tracking, FFT spectrum, octave analysis, levels, spectrogram, and more
+- **Multiple Data Types**: Support for pitch tracking, FFT spectrum, octave analysis, levels, spectrogram, raw audio, and more
 - **Flexible Protocols**: WebSocket, TCP, UDP, and HTTP Server-Sent Events
 - **Rate Limiting**: Configurable rate limiting to prevent overwhelming consumers
 - **Backpressure Handling**: Intelligent buffering and overflow management
@@ -171,6 +171,32 @@ class LevelsData:
     channel_labels: List[str]       # Channel labels
     integration_time: float         # RMS integration time
     peak_hold_time: float          # Peak hold time
+```
+
+### Raw Audio Data
+
+```python
+@dataclass
+class RawAudioData:
+    samples: np.ndarray             # Raw audio samples (channels x samples)
+    sample_rate: int                # Audio sample rate in Hz
+    channels: int                   # Number of audio channels
+    dtype: str                      # Data type string (e.g., 'float32')
+    timestamp: float                # Stream timestamp when samples were captured
+```
+
+**Important Notes:**
+- `samples` contains unprocessed audio data directly from the microphone
+- Data is provided with minimal overhead - no filtering, FFT, or processing applied
+- Sample count is limited to prevent excessive memory usage (max 1024 samples per packet)
+- Ideal for applications requiring direct access to raw audio stream
+
+**Example Usage:**
+```python
+def raw_audio_handler(data):
+    raw_audio = data.data
+    print(f"Raw audio: {raw_audio.samples.shape} samples, "
+          f"{raw_audio.channels} channels, {raw_audio.sample_rate} Hz")
 ```
 
 ## Protocols
@@ -682,6 +708,7 @@ See `friture/api/examples.py` for comprehensive examples including:
 - `DataType.DELAY_ESTIMATOR`: Delay estimation data
 - `DataType.SPECTROGRAM`: Time-frequency analysis data
 - `DataType.SCOPE`: Time-domain waveform data
+- `DataType.RAW_AUDIO`: Raw microphone audio data
 
 ## Future Extensions
 

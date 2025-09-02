@@ -42,7 +42,7 @@ import numpy as np
 class DataType(Enum):
     """
     Enumeration of supported data types for streaming.
-    
+
     Each data type corresponds to a specific audio analysis widget in Friture
     and has associated metadata and data structure requirements.
     """
@@ -53,6 +53,7 @@ class DataType(Enum):
     LEVELS = "levels"
     DELAY_ESTIMATOR = "delay_estimator"
     SCOPE = "scope"
+    RAW_AUDIO = "raw_audio"
 
 
 @dataclass(frozen=True)
@@ -233,10 +234,10 @@ class ScopeData:
 class DelayEstimatorData:
     """
     Delay estimation results between two audio channels.
-    
+
     Contains cross-correlation analysis results for measuring time delays
     and phase relationships between audio signals.
-    
+
     Attributes:
         delay_ms: Estimated delay in milliseconds
         delay_samples: Estimated delay in samples
@@ -254,6 +255,28 @@ class DelayEstimatorData:
 
 
 @dataclass(frozen=True)
+class RawAudioData:
+    """
+    Raw audio data from microphone input.
+
+    Contains unprocessed audio samples directly from the audio backend
+    with minimal overhead for real-time streaming applications.
+
+    Attributes:
+        samples: Raw audio samples as numpy array (channels x samples)
+        sample_rate: Audio sample rate in Hz
+        channels: Number of audio channels
+        dtype: Data type of samples (e.g., 'float32')
+        timestamp: Stream timestamp when samples were captured
+    """
+    samples: np.ndarray
+    sample_rate: int
+    channels: int
+    dtype: str
+    timestamp: float
+
+
+@dataclass(frozen=True)
 class StreamingData:
     """
     Container for all streaming data with metadata.
@@ -267,8 +290,8 @@ class StreamingData:
         data: Analysis results (type depends on data_type)
     """
     metadata: StreamingMetadata
-    data: Union[PitchData, FFTSpectrumData, OctaveSpectrumData, 
-                LevelsData, DelayEstimatorData, SpectrogramData, ScopeData]
+    data: Union[PitchData, FFTSpectrumData, OctaveSpectrumData,
+                LevelsData, DelayEstimatorData, SpectrogramData, ScopeData, RawAudioData]
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -357,6 +380,14 @@ class StreamingData:
                 'samples': self.data.samples.tolist(),
                 'trigger_mode': self.data.trigger_mode,
                 'trigger_level': self.data.trigger_level
+            }
+        elif isinstance(self.data, RawAudioData):
+            return {
+                'samples': self.data.samples.tolist(),
+                'sample_rate': self.data.sample_rate,
+                'channels': self.data.channels,
+                'dtype': self.data.dtype,
+                'timestamp': self.data.timestamp
             }
         else:
             return {}

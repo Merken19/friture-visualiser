@@ -42,9 +42,9 @@ from PyQt5.QtCore import QObject, QSettings
 
 from .streaming_api import get_streaming_api
 from .data_types import DataType
-from .producers import (PitchTrackerProducer, FFTSpectrumProducer, 
+from .producers import (PitchTrackerProducer, FFTSpectrumProducer,
                        OctaveSpectrumProducer, LevelsProducer, DelayEstimatorProducer,
-                       SpectrogramProducer, ScopeProducer)
+                       SpectrogramProducer, ScopeProducer, RawAudioProducer)
 from .consumers import CallbackConsumer, QueueConsumer, NetworkConsumer
 from .protocols import WebSocketProtocol, TCPProtocol, UDPProtocol, HTTPSSEProtocol
 from ..widgetdict import widgetIds
@@ -206,6 +206,26 @@ class StreamingIntegration(QObject):
         except Exception as e:
             self.logger.error(f"Error setting up levels producer: {e}")
 
+    def setup_raw_audio_producer(self, audio_backend) -> None:
+        """
+        Setup producer for raw microphone audio data.
+
+        This producer connects directly to the audio backend for minimal overhead
+        and provides unprocessed audio samples for real-time streaming applications.
+
+        Args:
+            audio_backend: AudioBackend instance
+        """
+        try:
+            producer = RawAudioProducer(audio_backend, "raw_audio_producer", self)
+            self.streaming_api.register_producer(DataType.RAW_AUDIO, producer)
+            self._active_producers["raw_audio_producer"] = producer
+
+            self.logger.info("Setup producer for raw audio data")
+
+        except Exception as e:
+            self.logger.error(f"Error setting up raw audio producer: {e}")
+
     def refresh_dock_producers(self) -> None:
         """
         Refresh producers for all docks. This can be called after the application
@@ -250,29 +270,33 @@ class StreamingIntegration(QObject):
         }
 
 
-def setup_streaming_integration(dock_manager, levels_widget=None, audio_buffer=None) -> StreamingIntegration:
+def setup_streaming_integration(dock_manager, levels_widget=None, audio_buffer=None, audio_backend=None) -> StreamingIntegration:
     """
     Setup streaming integration for Friture.
-    
+
     This is the main entry point for enabling streaming API functionality
     in Friture. It should be called during Friture initialization.
-    
+
     Args:
         dock_manager: Friture's dock manager instance
         levels_widget: Levels widget instance (optional)
         audio_buffer: Audio buffer instance (required for proper data flow)
-        
+        audio_backend: AudioBackend instance (optional, for raw audio producer)
+
     Returns:
         StreamingIntegration instance
     """
     if audio_buffer is None:
         raise ValueError("audio_buffer is required for streaming integration")
-    
+
     integration = StreamingIntegration(dock_manager, audio_buffer)
-    
+
     if levels_widget:
         integration.setup_levels_producer(levels_widget)
-    
+
+    if audio_backend:
+        integration.setup_raw_audio_producer(audio_backend)
+
     return integration
 
 
@@ -323,6 +347,7 @@ def create_default_streaming_setup(integration: StreamingIntegration,
                 DataType.PITCH_TRACKER,
                 DataType.SPECTROGRAM,
                 DataType.SCOPE,
+                DataType.RAW_AUDIO,
             ]:
                 api.register_consumer(dtype, consumer)
                 logger.info(
@@ -344,6 +369,7 @@ def create_default_streaming_setup(integration: StreamingIntegration,
         api.set_rate_limit(DataType.FFT_SPECTRUM, 25.0)    # 25 Hz
         api.set_rate_limit(DataType.OCTAVE_SPECTRUM, 25.0) # 25 Hz
         api.set_rate_limit(DataType.LEVELS, 25.0)          # 25 Hz
+        api.set_rate_limit(DataType.RAW_AUDIO, 25.0)       # 25 Hz for raw audio
         logger.info("Rate limits set to 25 Hz for all major data types.")
     except Exception as e:
         logger.warning("Failed to set rate limits: %s", e)

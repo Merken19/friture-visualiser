@@ -113,6 +113,10 @@ class __AudioBackend(QtCore.QObject):
                 self.second_channel = 0
             else:
                 self.second_channel = 1
+        else:
+            # Initialize channel attributes even if no device is found
+            self.first_channel = 0
+            self.second_channel = 0
 
         # counter for the number of input buffer overflows
         self.xruns = 0
@@ -120,6 +124,10 @@ class __AudioBackend(QtCore.QObject):
         self.chunk_number = 0
 
         self.devices_with_timing_errors = []
+
+        # Initialize stream timing attributes
+        self.stream_start_time = 0.0
+        self.stream_read_index = 0
 
     def close(self):
         if self.stream is not None:
@@ -301,6 +309,10 @@ class __AudioBackend(QtCore.QObject):
                 self.second_channel = 0
             else:
                 self.second_channel = 1
+        else:
+            # Restore channel attributes if device selection failed
+            self.first_channel = 0
+            self.second_channel = 0
 
         return success, self.input_devices.index(self.device)
 
@@ -403,6 +415,9 @@ class __AudioBackend(QtCore.QObject):
 
     # method
     def get_readable_current_channels(self):
+        if self.device is None:
+            return ['0']
+
         nchannels = self.device['max_input_channels']
 
         if nchannels == 2:
@@ -424,6 +439,8 @@ class __AudioBackend(QtCore.QObject):
 
     # method
     def get_current_device_nchannels(self):
+        if self.device is None:
+            return 1
         return self.device['max_input_channels']
 
     def get_device_outputchannels_count(self, device):
@@ -432,6 +449,12 @@ class __AudioBackend(QtCore.QObject):
     def fetchAudioData(self):
         if self.action is None or self.ringBuffer is None:
             return
+
+        # Ensure stream timing attributes are initialized
+        if not hasattr(self, 'stream_read_index'):
+            self.stream_read_index = 0
+        if not hasattr(self, 'stream_start_time'):
+            self.stream_start_time = self.get_stream_time()
 
         while self.ringBuffer.read_available >= FRAMES_PER_BUFFER:
             read, buf1, buf2 = self.ringBuffer.get_read_buffers(FRAMES_PER_BUFFER)
@@ -461,12 +484,10 @@ class __AudioBackend(QtCore.QObject):
                 self.logger.warning("Ringbuffer lagging behind: ringbuffer time = %f, stream time = %f", stream_read_time, stream_time)
 
             channel = self.get_current_first_channel()
-            if self.duo_input:
-                channel_2 = self.get_current_second_channel()
-
             floatdata1 = buffer[:, channel]
 
             if self.duo_input:
+                channel_2 = self.get_current_second_channel()
                 floatdata2 = buffer[:, channel_2]
                 floatdata = vstack((floatdata1, floatdata2))
             else:

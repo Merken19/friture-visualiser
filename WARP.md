@@ -196,6 +196,16 @@ This section documents the exact data path and key extension points for debuggin
      - Updated FFTSpectrumProducer to use stored processed data as primary method
    - **Impact**: Eliminates frequency data corruption, ensures exact match with original application display, and provides perfectly synchronized spectrum data for streaming.
 
+4. **Raw Audio Producer Implementation (January 2025)**:
+   - **Problem**: No direct access to raw microphone audio samples with minimal overhead for real-time streaming applications.
+   - **Solution**: Implemented `RawAudioProducer` class that connects directly to `AudioBackend.new_data_available` signal:
+     - Added `RAW_AUDIO` to `DataType` enum and `RawAudioData` dataclass
+     - Created producer that bypasses widget processing pipelines
+     - Added sample size limits (max 1024 samples per packet) to prevent memory issues
+     - Implemented comprehensive data validation and error handling
+     - Added buffer manager configuration for RAW_AUDIO data type
+   - **Impact**: Provides purest possible path from microphone to network with zero additional processing, ideal for custom audio analysis applications requiring direct sample access.
+
 1) Data Extraction from Widgets (Producers)
 - Location: `friture/api/producers.py`
 - Base class: `DataProducer` (QObject + ABC)
@@ -210,6 +220,7 @@ This section documents the exact data path and key extension points for debuggin
   - `SpectrogramProducer`: Reads from `widget.spectrogram_data` (timestamps, frequencies, magnitudes).
   - `ScopeProducer`: Reads from `widget.scope_data` (timestamps, samples).
   - `DelayEstimatorProducer`: Connects to `widget.new_result_available` and reads properties like `delay_ms`, `correlation`, etc.
+  - `RawAudioProducer`: Connects directly to `AudioBackend.new_data_available` signal for minimal overhead access to raw microphone samples. Provides unprocessed audio data with configurable sample limits (max 1024 samples per packet).
 
 2) API Intake, Buffering, and Distribution
 - Location: `friture/api/streaming_api.py`

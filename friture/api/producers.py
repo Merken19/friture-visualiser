@@ -46,8 +46,8 @@ import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from .data_types import (DataType, PitchData, FFTSpectrumData, OctaveSpectrumData,
-                        LevelsData, DelayEstimatorData, SpectrogramData, ScopeData,
-                        StreamingMetadata, create_streaming_data)
+                         LevelsData, DelayEstimatorData, SpectrogramData, ScopeData,
+                         RawAudioData, StreamingMetadata, create_streaming_data)
 from ..audiobackend import AudioBackend
 from .consumers import QObjectABCMeta
 
@@ -103,11 +103,12 @@ class DataProducer(QObject, ABC, metaclass=QObjectABCMeta):
             StreamingMetadata instance
         """
         backend = AudioBackend()
-        
+        from ..audiobackend import SAMPLING_RATE
+
         return StreamingMetadata(
             timestamp=time.time(),
             stream_time=backend.get_stream_time(),
-            sample_rate=backend.SAMPLING_RATE if hasattr(backend, 'SAMPLING_RATE') else 48000,
+            sample_rate=SAMPLING_RATE,
             channels=backend.get_current_device_nchannels() if hasattr(backend, 'get_current_device_nchannels') else 1,
             data_type=self.get_data_type(),
             sequence_number=self._sequence_number,
@@ -947,7 +948,8 @@ class DelayEstimatorProducer(DataProducer):
             confidence = correlation / 100.0 if correlation > 0 else 0.0
             
             # Calculate delay in samples
-            sample_rate = AudioBackend().SAMPLING_RATE if hasattr(AudioBackend(), 'SAMPLING_RATE') else 48000
+            from ..audiobackend import SAMPLING_RATE
+            sample_rate = SAMPLING_RATE
             delay_samples = int(delay_ms * sample_rate / 1000.0)
             
             return DelayEstimatorData(
@@ -973,4 +975,136 @@ class DelayEstimatorProducer(DataProducer):
             'delay_range_s': getattr(self.widget, 'delayrange_s', 1.0),
             'two_channels': getattr(self.widget, 'two_channels', False),
             'subsampled_rate': getattr(self.widget, 'subsampled_sampling_rate', 12000)
+        }
+
+
+class RawAudioProducer(DataProducer):
+    """
+    Producer for raw microphone audio data.
+
+    Extracts unprocessed audio samples directly from the audio backend
+    with minimal overhead for real-time streaming applications.
+    This producer connects directly to the AudioBackend to bypass
+    widget processing and provide the purest raw audio stream.
+    """
+
+    def __init__(self, audio_backend, widget_id: str, parent=None):
+        # For raw audio, we don't need a widget, we use the audio backend directly
+        super().__init__(audio_backend, widget_id, parent)
+        self.audio_backend = audio_backend
+        self._latest_floatdata = None
+        self._latest_stream_time = 0.0
+
+    def start(self) -> None:
+        """Start producing raw audio data."""
+        if self._is_active:
+            return
+
+        self._is_active = True
+
+        # Connect directly to the audio backend's new_data_available signal
+        # This provides the most direct access to raw audio data
+        self.audio_backend.new_data_available.connect(self._on_new_audio_data)
+
+        self.started.emit()
+        self.logger.info("RawAudioProducer started")
+
+    def stop(self) -> None:
+        """Stop producing raw audio data."""
+        if not self._is_active:
+            return
+
+        self._is_active = False
+
+        # Disconnect from the audio backend signal
+        try:
+            self.audio_backend.new_data_available.disconnect(self._on_new_audio_data)
+        except TypeError:
+            pass  # Signal was not connected
+
+        self.stopped.emit()
+        self.logger.info("RawAudioProducer stopped")
+
+    def _on_new_audio_data(self, floatdata: np.ndarray, stream_time: float, input_overflow: bool) -> None:
+        """Handle new raw audio data from the backend."""
+        if not self._is_active:
+            return
+
+        try:
+            # Store the latest data for extraction
+            self._latest_floatdata = floatdata
+            self._latest_stream_time = stream_time
+
+            # Extract and emit data immediately
+            data = self.extract_data()
+            if data is not None:
+                self._emit_data(data)
+        except Exception as e:
+            self.logger.error(f"Error processing raw audio data: {e}")
+            self.error_occurred.emit(str(e))
+
+    def extract_data(self) -> Optional[RawAudioData]:
+        """Extract raw audio data from the stored latest data."""
+        try:
+            if self._latest_floatdata is None:
+                return None
+
+            # Validate data shape and size
+            if len(self._latest_floatdata.shape) == 0:
+                return None
+
+            # Get audio parameters from backend
+            from ..audiobackend import SAMPLING_RATE
+            sample_rate = SAMPLING_RATE
+
+            # Determine channels from data shape
+            if len(self._latest_floatdata.shape) == 1:
+                channels = 1
+                samples = self._latest_floatdata.reshape(1, -1)  # Ensure 2D shape
+            else:
+                channels = self._latest_floatdata.shape[0]
+                samples = self._latest_floatdata
+
+            # Validate sample count
+            if samples.shape[1] == 0:
+                return None
+
+            # Limit sample count to prevent excessive memory usage
+            max_samples = 1024  # Limit to 1024 samples per packet
+            if samples.shape[1] > max_samples:
+                samples = samples[:, :max_samples]
+
+            # Determine dtype string
+            if samples.dtype == np.float32:
+                dtype_str = 'float32'
+            elif samples.dtype == np.float64:
+                dtype_str = 'float64'
+            else:
+                dtype_str = str(samples.dtype)
+
+            return RawAudioData(
+                samples=samples.copy(),  # Copy to avoid reference issues
+                sample_rate=sample_rate,
+                channels=channels,
+                dtype=dtype_str,
+                timestamp=self._latest_stream_time
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error extracting raw audio data: {e}")
+            return None
+
+    def get_data_type(self) -> DataType:
+        """Get the data type this producer generates."""
+        return DataType.RAW_AUDIO
+
+    def get_custom_metadata(self) -> Dict[str, Any]:
+        """Get raw audio specific metadata."""
+        backend = AudioBackend()
+        return {
+            'device_name': getattr(backend.device, 'name', 'Unknown') if backend.device else 'No Device',
+            'device_channels': getattr(backend.device, 'max_input_channels', 1) if backend.device else 1,
+            'buffer_size': getattr(backend, 'FRAMES_PER_BUFFER', 512),
+            'latency_ms': getattr(backend.stream, 'latency', 0) * 1000 if hasattr(backend, 'stream') and backend.stream else 0,
+            'input_overflows': getattr(backend, 'xruns', 0)
         }

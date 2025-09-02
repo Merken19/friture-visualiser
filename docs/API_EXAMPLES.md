@@ -83,6 +83,52 @@ if __name__ == "__main__":
     analyze_spectrum()
 ```
 
+### Raw Audio Streaming
+
+```python
+import numpy as np
+from friture.api import get_streaming_api, DataType, CallbackConsumer
+
+def stream_raw_audio():
+    api = get_streaming_api()
+
+    def raw_audio_callback(data):
+        raw_audio = data.data
+
+        # Access raw audio samples
+        samples = raw_audio.samples  # numpy array (channels x samples)
+        sample_rate = raw_audio.sample_rate
+        channels = raw_audio.channels
+        timestamp = raw_audio.timestamp
+
+        print(f"Raw audio: {samples.shape} samples, {channels} channels, "
+              f"{sample_rate} Hz, timestamp: {timestamp:.3f}")
+
+        # Example: Calculate RMS level from raw samples
+        if channels > 0 and samples.shape[1] > 0:
+            # Take first channel
+            channel_data = samples[0, :] if channels > 1 else samples[0, :]
+            rms = np.sqrt(np.mean(channel_data ** 2))
+            rms_db = 20 * np.log10(rms) if rms > 0 else -np.inf
+            print(f"RMS Level: {rms_db:.1f} dB")
+
+    consumer = CallbackConsumer(raw_audio_callback)
+    api.register_consumer(DataType.RAW_AUDIO, consumer)
+    api.start_streaming()
+
+    print("Raw audio streaming started. Speak into microphone!")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        api.stop_streaming()
+        print("Raw audio streaming stopped.")
+
+if __name__ == "__main__":
+    stream_raw_audio()
+```
+
 ## Web Integration
 
 ### Real-time Web Dashboard

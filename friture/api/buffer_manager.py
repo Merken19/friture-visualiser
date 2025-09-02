@@ -104,7 +104,8 @@ class BufferManager:
             DataType.LEVELS: {**default_config, 'max_size': 1000, 'strategy': 'lifo'},
             DataType.DELAY_ESTIMATOR: {**default_config, 'max_size': 100},
             DataType.SPECTROGRAM: {**default_config, 'max_size': 50, 'priority': 2.0},
-            DataType.SCOPE: {**default_config, 'max_size': 200, 'strategy': 'lifo'}
+            DataType.SCOPE: {**default_config, 'max_size': 200, 'strategy': 'lifo'},
+            DataType.RAW_AUDIO: {**default_config, 'max_size': 100, 'strategy': 'lifo'}  # Raw audio needs smaller buffer
         }
         
         for data_type, config in configs.items():

@@ -476,7 +476,7 @@ def main():
     fileHandler.setFormatter(formatter)
 
     rootLogger = logging.getLogger()
-    rootLogger.setLevel(logging.DEBUG)
+    rootLogger.setLevel(logging.DEBUG) #Disable for production, spams out the streamed messages in console
     rootLogger.addHandler(fileHandler)
 
     if hasattr(sys, "frozen"):
